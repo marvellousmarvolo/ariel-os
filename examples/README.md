@@ -16,6 +16,7 @@ This directory contains example applications that showcase how to use Ariel OS.
 - [minimal/](./minimal): minimized to the max Ariel OS config
 - [random/](./random): demonstrate obtaining random values
 - [tcp-echo/](./tcp-echo): TCP echo example
+- [tcp-blinky/](./tcp-blinky): control LED via TCP example
 - [thread-async-interop/](./thread-async-interop): how to make async tasks and preemptively scheduled threads interoperate
 - [threading/](./threading): how to start and use preemptively scheduled threads
 - [threading-channel/](./threading-channel): how to use `ariel_os::thread::sync::Channel` for passing messages between threads
