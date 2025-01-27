@@ -26,6 +26,7 @@ subdirs:
   - storage
   - tcp-client
   - tcp-echo
+  - tcp-blinky
   - testing
   - thermometer
   - thread-async-interop

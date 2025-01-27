@@ -6068,6 +6068,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tcp-blinky"
+version = "0.1.0"
+dependencies = [
+ "ariel-os",
+ "ariel-os-boards",
+ "embedded-io-async",
+ "heapless 0.8.0",
+]
+
+[[package]]
 name = "tcp-echo"
 version = "0.0.0"
 dependencies = [
