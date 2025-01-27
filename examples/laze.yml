@@ -25,6 +25,7 @@ subdirs:
   - sensors-debug
   - storage
   - tcp-echo
+  - tcp-blinky
   - testing
   - thermometer
   - thread-async-interop
