@@ -1,7 +1,7 @@
-//! UDP sockets usable through [`embedded_nal_async`].
+//! UDP sockets usable through [`embedded_nal_async`]
 //!
 //! The full [`embedded_nal_async::UdpStack`] is *not* implemented at the moment: As its API allows
-//! arbitrary creation of movable sockets, embassy's [`udp::UdpSocket`] type could only be created if
+//! arbitrary creation of movable sockets, embassy's [`udp::UdpSocket`] type could only be crated if
 //! the NAL stack had a pre-allocated pool of sockets with their respective buffers. Nothing rules
 //! out such a type, but at the moment, only the bound or connected socket types are implemented
 //! with their own constructors from an embassy [`crate::Stack`] -- for many applications, those are
@@ -19,7 +19,7 @@
 use core::future::poll_fn;
 use core::net::SocketAddr;
 
-use embassy_net::{IpAddress, IpEndpoint, udp};
+use embassy_net::{udp, IpAddress, IpEndpoint};
 use embedded_nal_async as nal;
 
 mod util;
@@ -41,7 +41,7 @@ pub struct ConnectedUdp<'a> {
     socket: udp::UdpSocket<'a>,
 }
 
-/// A UDP socket that has been bound locally (either to a unique address or just to a port).
+/// A UDP socket that has been bound locally (either to a unique address or just to a port)
 ///
 /// Its operations are accessible through the [`nal::UnconnectedUdp`] trait.
 pub struct UnconnectedUdp<'a> {
@@ -55,7 +55,7 @@ pub struct UnconnectedUdp<'a> {
     reason = "pub item is being prepared for embedded-nal-async-example where it will be reachable publicly"
 )]
 impl<'a> ConnectedUdp<'a> {
-    /// Create a [`ConnectedUdp`] by assigning it a remote and a concrete local address.
+    /// Create a [`ConnectedUdp`] by assigning it a remote and a concrete local address
     ///
     /// ## Prerequisites
     ///
@@ -85,7 +85,7 @@ impl<'a> ConnectedUdp<'a> {
     }
 
     /// Create a [`ConnectedUdp`] by assigning it a remote and a local address (the latter may
-    /// happen lazily).
+    /// happen lazily)
     ///
     /// ## Prerequisites
     ///
@@ -141,7 +141,7 @@ impl nal::UnconnectedUdp for UnconnectedUdp<'_> {
         // information, so the underlying layers won't even have a *chance* to care if we don't
         // check here.
         debug_assert!(
-            local.port() == 0 || local.port() == self.socket.endpoint().port,
+            local.port() == 0 || local.port() == self.socket.with(|s, _| s.endpoint().port),
             "Port of local address, when given, must match bound port."
         );
 
@@ -171,7 +171,7 @@ impl nal::UnconnectedUdp for UnconnectedUdp<'_> {
                 addr: metadata
                     .local_address
                     .expect("Local address is always populated on receive"),
-                port: self.socket.endpoint().port,
+                port: self.socket.with(|s, _| s.endpoint().port),
             }),
             sockaddr_smol2nal(metadata.endpoint),
         ))

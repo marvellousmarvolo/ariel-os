@@ -2259,6 +2259,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-nal-async-example"
+version = "0.0.0"
+dependencies = [
+ "ariel-os",
+ "ariel-os-boards",
+ "ariel-os-embassy",
+ "embassy-futures",
+ "embassy-net",
+ "embassy-sync 0.6.2",
+ "embedded-io-async",
+ "embedded-nal-async",
+]
+
+[[package]]
 name = "embedded-nal-coap"
 version = "0.1.0-alpha.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5524,6 +5538,26 @@ checksum = "1ac9aa371f599d22256307c24a9d748c041e548cbf599f35d890f9d365361790"
 
 [[package]]
 name = "tcp-blinky"
+version = "0.1.0"
+dependencies = [
+ "ariel-os",
+ "ariel-os-boards",
+ "embedded-io-async",
+ "heapless 0.8.0",
+]
+
+[[package]]
+name = "tcp-blinky-button-sender"
+version = "0.1.0"
+dependencies = [
+ "ariel-os",
+ "ariel-os-boards",
+ "embedded-io-async",
+ "heapless 0.8.0",
+]
+
+[[package]]
+name = "tcp-blinky-sender"
 version = "0.1.0"
 dependencies = [
  "ariel-os",
