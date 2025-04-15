@@ -41,3 +41,4 @@ subdirs:
   - usb-serial
   - embedded-nal-async-example
   - mqtt-sn-example
+  - mqtt-sn-client
