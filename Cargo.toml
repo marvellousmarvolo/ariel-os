@@ -1,47 +1,42 @@
 [workspace]
 members = [
-  "examples/*",
-  "src/lib/rbi",
-  "src/lib/ringbuffer",
-  "src/lib/coapcore",
-  "src/ariel-os",
-  "src/ariel-os-alloc",
-  "src/ariel-os-bench",
-  "src/ariel-os-boards",
-  "src/ariel-os-buildinfo",
-  "src/ariel-os-coap",
-  "src/ariel-os-debug",
-  "src/ariel-os-debug-log",
-  "src/ariel-os-embassy-common",
-  "src/ariel-os-esp",
-  "src/ariel-os-hal",
-  "src/ariel-os-identity",
-  "src/ariel-os-macros",
-  "src/ariel-os-nrf",
-  "src/ariel-os-power",
-  "src/ariel-os-random",
-  "src/ariel-os-rp",
-  "src/ariel-os-sensors",
-  "src/ariel-os-sensors-registry",
-  "src/ariel-os-sensors-utils",
-  "src/ariel-os-stm32",
-  "src/ariel-os-storage",
-  "tests/benchmarks/bench_sched_flags",
-  "tests/benchmarks/bench_sched_yield",
-  "tests/coap",
-  "tests/coap-blinky",
-  "tests/gpio",
-  "tests/gpio-interrupt-nrf",
-  "tests/gpio-interrupt-stm32",
-  "tests/i2c-controller",
-  "tests/random-getrandom",
-  "tests/spi-loopback",
-  "tests/spi-main",
-  "tests/threading-dynamic-prios",
-  "tests/threading-lock",
-  "tests/threading-mutex",
-  "tests/threading-fpu",
-  "tests/uart-loopback",
+    "examples/*",
+    "src/lib/rbi",
+    "src/lib/ringbuffer",
+    "src/lib/coapcore",
+    "src/ariel-os",
+    "src/ariel-os-alloc",
+    "src/ariel-os-bench",
+    "src/ariel-os-boards",
+    "src/ariel-os-buildinfo",
+    "src/ariel-os-coap",
+    "src/ariel-os-debug",
+    "src/ariel-os-debug-log",
+    "src/ariel-os-embassy-common",
+    "src/ariel-os-esp",
+    "src/ariel-os-hal",
+    "src/ariel-os-identity",
+    "src/ariel-os-macros",
+    "src/ariel-os-mqttsn",
+    "src/ariel-os-nrf",
+    "src/ariel-os-power",
+    "src/ariel-os-random",
+    "src/ariel-os-rp",
+    "src/ariel-os-stm32",
+    "src/ariel-os-storage",
+    "tests/benchmarks/bench_sched_flags",
+    "tests/benchmarks/bench_sched_yield",
+    "tests/coap",
+    "tests/coap-blinky",
+    "tests/gpio",
+    "tests/gpio-interrupt-nrf",
+    "tests/gpio-interrupt-stm32",
+    "tests/i2c-controller",
+    "tests/spi-loopback",
+    "tests/spi-main",
+    "tests/threading-dynamic-prios",
+    "tests/threading-lock",
+    "tests/threading-mutex",
 ]
 
 exclude = ["src/lib", "doc"]
@@ -60,7 +55,7 @@ repository = "https://github.com/ariel-os/ariel-os"
 [workspace.dependencies]
 cfg-if = { version = "1.0.0" }
 cortex-m = { version = "0.7", default-features = false, features = [
-  "inline-asm",
+    "inline-asm",
 ] }
 cortex-m-rt = { version = "0.7.5" }
 cortex-m-semihosting = { version = "0.5" }
@@ -69,7 +64,7 @@ featurecomb = "0.1.3"
 # Disabling default features may reduce the code size by not providing atomics
 # for types larger than the pointer width, which we do not use.
 portable-atomic = { version = "1.11.0", default-features = false, features = [
-  "require-cas",
+    "require-cas",
 ] }
 semihosting = { version = "0.1.16", default-features = false }
 
@@ -95,12 +90,13 @@ embedded-nal-coap = "0.1.0-alpha.4"
 embedded-storage = { version = "0.3.1" }
 embedded-storage-async = { version = "0.4.1" }
 embedded-test = { version = "0.6.1", default-features = false, features = [
-  "ariel-os",
+    "ariel-os",
+    "semihosting",
 ] }
 
 esp-alloc = { version = "0.6.0", default-features = false }
 esp-hal = { version = "0.23.1", default-features = false, features = [
-  "unstable",
+    "unstable",
 ] }
 esp-hal-embassy = { version = "0.6.0", default-features = false }
 esp-println = { version = "0.13.0", default-features = false }
@@ -125,7 +121,7 @@ ariel-os-embassy-common = { path = "src/ariel-os-embassy-common" }
 ariel-os-esp = { path = "src/ariel-os-esp" }
 ariel-os-hal = { path = "src/ariel-os-hal", default-features = false }
 ariel-os-identity = { path = "src/ariel-os-identity" }
-ariel-os-macros = { path = "src/ariel-os-macros" }
+ariel-os-mqttsn = { path = "src/ariel-os-mqttsn" }
 ariel-os-nrf = { path = "src/ariel-os-nrf" }
 ariel-os-power = { path = "src/ariel-os-power" }
 ariel-os-random = { path = "src/ariel-os-random" }
@@ -148,8 +144,8 @@ fugit = { version = "0.3.7", default-features = false }
 heapless = { version = "0.8.0", default-features = false }
 ld-memory = { version = "0.2.9" }
 log = { version = "0.4.20", default-features = false }
-once_cell = { version = "1.21.3", default-features = false, features = [
-  "critical-section",
+once_cell = { version = "=1.19.0", default-features = false, features = [
+    "critical-section",
 ] }
 paste = { version = "1.0" }
 pin-project = "1.1.10"
