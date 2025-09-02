@@ -41,3 +41,5 @@ subdirs:
   - mqtt-sn-client
   - mqtt-sn-button
   - mqtt-sn-light
+  - async-interop
+  - async-interop-zero-copy
