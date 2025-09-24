@@ -8,8 +8,8 @@ publish = false
 workspace = true
 
 [dependencies]
-embassy-futures = { workspace = true }
 ariel-os = { path = "../../src/ariel-os", features = ["udp"] }
+embassy-futures = { workspace = true }
 ariel-os-mqttsn = { workspace = true }
 embedded-io-async = "0.6.1"
 embedded-nal-async = "0.8"

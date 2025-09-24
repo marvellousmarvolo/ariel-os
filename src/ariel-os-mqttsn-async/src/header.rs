@@ -108,15 +108,15 @@ impl Header {
         let mut result: [u8; 4] = [0u8; 4];
         match self {
             Header::Long(long) => {
-                info!("long {:?}", long.value.to_be_bytes());
+                debug!("long {:?}", long.value.to_be_bytes());
                 result.copy_from_slice(&long.value.to_be_bytes()[..4])
             }
             Header::Short(short) => {
-                info!("short {:?}", short.value.to_be_bytes());
+                debug!("short {:?}", short.value.to_be_bytes());
                 result[..2].copy_from_slice(&short.value.to_be_bytes()[..2])
             }
         }
-        info!("result {:?}", result);
+        debug!("result {:?}", result);
         result
     }
 }
