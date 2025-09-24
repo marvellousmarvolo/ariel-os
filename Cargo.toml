@@ -1,44 +1,46 @@
 [workspace]
 resolver = "3"
 members = [
-    "examples/*",
-    "src/lib/rbi",
-    "src/lib/ringbuffer",
-    "src/lib/coapcore",
-    "src/ariel-os",
-    "src/ariel-os-alloc",
-    "src/ariel-os-bench",
-    "src/ariel-os-boards",
-    "src/ariel-os-buildinfo",
-    "src/ariel-os-coap",
-    "src/ariel-os-debug",
-    "src/ariel-os-debug-log",
-    "src/ariel-os-embassy-common",
-    "src/ariel-os-esp",
-    "src/ariel-os-hal",
-    "src/ariel-os-identity",
-    "src/ariel-os-macros",
-    "src/ariel-os-mqttsn",
-    "src/ariel-os-mqttsn-async",
-    "src/ariel-os-nrf",
-    "src/ariel-os-power",
-    "src/ariel-os-random",
-    "src/ariel-os-rp",
-    "src/ariel-os-stm32",
-    "src/ariel-os-storage",
-    "tests/benchmarks/bench_sched_flags",
-    "tests/benchmarks/bench_sched_yield",
-    "tests/coap",
-    "tests/coap-blinky",
-    "tests/gpio",
-    "tests/gpio-interrupt-nrf",
-    "tests/gpio-interrupt-stm32",
-    "tests/i2c-controller",
-    "tests/spi-loopback",
-    "tests/spi-main",
-    "tests/threading-dynamic-prios",
-    "tests/threading-lock",
-    "tests/threading-mutex",
+  "examples/*",
+  "src/lib/rbi",
+  "src/lib/ringbuffer",
+  "src/lib/coapcore",
+  "src/ariel-os",
+  "src/ariel-os-alloc",
+  "src/ariel-os-bench",
+  "src/ariel-os-boards",
+  "src/ariel-os-buildinfo",
+  "src/ariel-os-coap",
+  "src/ariel-os-debug",
+  "src/ariel-os-debug-log",
+  "src/ariel-os-embassy-common",
+  "src/ariel-os-esp",
+  "src/ariel-os-hal",
+  "src/ariel-os-identity",
+  "src/ariel-os-mqttsn",
+  "src/ariel-os-mqttsn-async",
+  "src/ariel-os-macros",
+  "src/ariel-os-nrf",
+  "src/ariel-os-power",
+  "src/ariel-os-random",
+  "src/ariel-os-rp",
+  "src/ariel-os-sensors",
+  "src/ariel-os-stm32",
+  "src/ariel-os-storage",
+  "tests/benchmarks/bench_sched_flags",
+  "tests/benchmarks/bench_sched_yield",
+  "tests/coap",
+  "tests/coap-blinky",
+  "tests/gpio",
+  "tests/gpio-interrupt-nrf",
+  "tests/gpio-interrupt-stm32",
+  "tests/i2c-controller",
+  "tests/spi-loopback",
+  "tests/spi-main",
+  "tests/threading-dynamic-prios",
+  "tests/threading-lock",
+  "tests/threading-mutex",
+  "tests/threading-fpu",
 ]
 exclude = ["src/lib", "doc"]
 default-members = ["examples/hello-world"]
@@ -54,7 +56,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 cfg-if = { version = "1.0.0" }
 cortex-m = { version = "0.7", default-features = false, features = [
-    "inline-asm",
+  "inline-asm",
 ] }
 cortex-m-rt = { version = "0.7.5" }
 cortex-m-semihosting = { version = "0.5" }
@@ -63,7 +65,7 @@ featurecomb = "0.2.0"
 # Disabling default features may reduce the code size by not providing atomics
 # for types larger than the pointer width, which we do not use.
 portable-atomic = { version = "1.11.0", default-features = false, features = [
-    "require-cas",
+  "require-cas",
 ] }
 riscv = { version = "0.15.0", default-features = false }
 semihosting = { version = "0.1.24", default-features = false }
@@ -91,13 +93,12 @@ embedded-nal-coap = "=0.1.0-alpha.5"
 embedded-storage = { version = "0.3.1" }
 embedded-storage-async = { version = "0.4.1" }
 embedded-test = { version = "0.6.1", default-features = false, features = [
-    "ariel-os",
-    "semihosting",
+  "ariel-os",
 ] }
 
 esp-alloc = { version = "0.6.0", default-features = false }
 esp-hal = { version = "0.23.1", default-features = false, features = [
-    "unstable",
+  "unstable",
 ] }
 esp-metadata-generated = { version = "0.3.0", default-features = false }
 esp-println = { version = "0.16.0", default-features = false }
@@ -125,6 +126,7 @@ ariel-os-embassy-common = { path = "src/ariel-os-embassy-common" }
 ariel-os-esp = { path = "src/ariel-os-esp" }
 ariel-os-hal = { path = "src/ariel-os-hal", default-features = false }
 ariel-os-identity = { path = "src/ariel-os-identity" }
+ariel-os-macros = { path = "src/ariel-os-macros" }
 ariel-os-mqttsn = { path = "src/ariel-os-mqttsn" }
 ariel-os-mqttsn-async = { path = "src/ariel-os-mqttsn-async" }
 ariel-os-nrf = { path = "src/ariel-os-nrf" }
@@ -157,7 +159,7 @@ heapless = { version = "0.9.1", default-features = false }
 ld-memory = { version = "0.2.9" }
 log = { version = "0.4.20", default-features = false }
 once_cell = { version = "=1.19.0", default-features = false, features = [
-    "critical-section",
+  "critical-section",
 ] }
 paste = { version = "1.0" }
 pin-project-lite = "0.2.16"
