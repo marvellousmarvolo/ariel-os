@@ -5,10 +5,11 @@ mod message_variable_part;
 mod packet;
 pub mod udp_nal;
 
-use ariel_os::{debug::log::*, reexports::embassy_time::TimeoutError};
 use ariel_os::net;
 use ariel_os::time::Duration;
+use ariel_os::{debug::log::*, reexports::embassy_time::TimeoutError};
 // TODO: when rebased, change to ariel_os::time::with_timeout
+use crate::flags::QoS;
 use ariel_os::reexports::embassy_time::WithTimeout;
 use core::{default::Default, net::SocketAddr};
 use embassy_executor::Spawner;
@@ -58,7 +59,7 @@ pub enum Action {
 enum State {
     #[default]
     Disconnected,
-    Connected,
+    Active,
 }
 
 #[derive(Debug)]
@@ -71,7 +72,7 @@ pub enum Error {
     InvalidIdType,
 }
 
-#[derive(Debug, defmt::Format, Clone)]
+#[derive(Debug, defmt::Format, Clone, PartialEq)]
 pub enum Topic {
     Id(u16),
     ShortName([u8; 2]),
@@ -79,18 +80,21 @@ pub enum Topic {
 }
 
 pub struct MqttsnConnection<'a> {
+    stack: net::NetworkStack,
     state: State,
     local: SocketAddr,
     remote: SocketAddr,
     socket: udp_nal::UnconnectedUdp<'a>,
     action_rx: Receiver<'a, CriticalSectionRawMutex, Action, 1>,
+    msg_id: u16,
 }
 
 impl<'a> MqttsnConnection<'a> {
     async fn handle_action(&mut self, action: Action) -> Result<(), Error> {
         match action {
-            Action::Subscribe(_) => {
+            Action::Subscribe(topic) => {
                 info!("subscribe");
+                self.subscribe(topic, false, QoS::Zero).await?;
             }
             Action::Publish { topic, payload } => {
                 info!("publish");
@@ -100,17 +104,16 @@ impl<'a> MqttsnConnection<'a> {
     }
 
     async fn run(&mut self) {
+        self.stack.wait_config_up().await;
         // TODO: loop, handle errors
-        match self.connect(60000, b"ariel", false, false)
-            .await {
-                Ok(_) => (),
-                Err(e) => match e {
-                    Error::Timeout => info!("TIMEOUT ERROR"),
-                    Error::TransmissionFailed => info!("TRANSMISSION ERROR"),
-                    _ => info!("OTHER ERROR")
-                }
-            }
-            
+        match self.connect(60000, b"ariel", false, false).await {
+            Ok(_) => (),
+            Err(e) => match e {
+                Error::Timeout => info!("TIMEOUT ERROR"),
+                Error::TransmissionFailed => info!("TRANSMISSION ERROR"),
+                _ => info!("OTHER ERROR"),
+            },
+        }
 
         // TODO: "32" is arbitrary
         let mut rx_buf = [0; MAX_PAYLOAD_SIZE + 32];
@@ -128,6 +131,13 @@ impl<'a> MqttsnConnection<'a> {
         }
     }
 
+    fn check_state(&self, state: State) -> Result<(), Error> {
+        if self.state != state {
+            return Err(Error::InvalidState);
+        }
+        Ok(())
+    }
+
     pub async fn connect(
         &mut self,
         duration_millis: u16,
@@ -135,14 +145,10 @@ impl<'a> MqttsnConnection<'a> {
         will: bool,
         clean_session: bool,
     ) -> Result<(), Error> {
-        info!("connect");
         use flags::{Flags, QoS, TopicIdType};
-
+        info!("connect");
+        self.check_state(State::Disconnected)?;
         let mut buf: [u8; MAX_PAYLOAD_SIZE + 32] = [0; MAX_PAYLOAD_SIZE + 32];
-
-        if self.state != State::Disconnected {
-            return Err(Error::InvalidState);
-        }
 
         // build "connect" packet
         let flags = Flags::new(
@@ -154,20 +160,12 @@ impl<'a> MqttsnConnection<'a> {
             false,
         );
 
-        let msg_len = calculate_message_length(client_id.len(), mvp::Connect::SIZE);
+        let packet = Packet::connect(client_id, flags);
 
-        let packet = Packet::Connect {
-            header: Header::new(MsgType::Connect, msg_len),
-            connect: mvp::Connect::new(0x00, 0x01, flags),
-            client_id,
-        };
-
-        // send connect packet
-        packet.write_to_buf(&mut buf);
         {
+            // send connect packet
             info!("connect: send");
-            let packet_slice = &buf[..msg_len as usize];
-            debug!("Send buffer: {:?}", packet_slice);
+            let packet_slice = packet.write_to_buf(&mut buf);
             self.send(packet_slice).await?;
         }
 
@@ -181,13 +179,44 @@ impl<'a> MqttsnConnection<'a> {
             .map(|res| res.get_msg_type())?
         {
             MsgType::ConnAck => {
-                self.state = State::Connected;
+                self.state = State::Active;
                 Ok(())
             }
             _ => {
                 info!("Transmission failed!");
                 Err(Error::TransmissionFailed)
             }
+        }
+    }
+
+    pub async fn subscribe(&mut self, topic: Topic, dup: bool, qos: QoS) -> Result<Topic, Error> {
+        info!("send subscribe");
+        self.check_state(State::Active)?;
+        let mut buf: [u8; MAX_PAYLOAD_SIZE + 32] = [0; MAX_PAYLOAD_SIZE + 32];
+
+        let packet = Packet::subscribe(&topic, dup, qos, self.msg_id);
+
+        {
+            let packet_slice = packet.write_to_buf(&mut buf);
+            self.send(packet_slice).await?;
+        }
+
+        self.msg_id += 1;
+
+        match self
+            .receive(&mut buf)
+            .with_timeout(Duration::from_millis(60000))
+            .await
+        {
+            Ok(res) => match res? {
+                Packet::SubAck { header: _, sub_ack } => {
+                    let topic_id = sub_ack.get_topic_id();
+                    info!("received Topic Id {:?} for Topic {:?}", topic_id, topic);
+                    Ok(Topic::from_id(topic_id))
+                }
+                _ => Err(Error::TransmissionFailed),
+            },
+            Err(_) => Err(Error::Timeout),
         }
     }
 
@@ -216,7 +245,7 @@ impl<'a> MqttsnConnection<'a> {
 pub async fn client() {
     let stack = net::network_stack().await.unwrap();
     let local = "0.0.0.0:1234".parse().unwrap();
-    let remote: SocketAddr = "10.42.0.1:1884".parse().unwrap();
+    let remote: SocketAddr = "192.168.1.129:1884".parse().unwrap();
 
     let mut rx_meta = [PacketMetadata::EMPTY; 16];
     let mut rx_buffer = [0; 4096];
@@ -237,6 +266,8 @@ pub async fn client() {
 
     let action_rx = ACTION_CHANNEL.receiver();
     let mut connection = MqttsnConnection {
+        msg_id: 0,
+        stack,
         socket,
         local,
         remote,
@@ -266,6 +297,16 @@ impl Topic {
             Self::Id(_id) => 2,
             Self::ShortName(_short_name) => 2,
             Self::LongName(long_name) => long_name.len(),
+        }
+    }
+
+    fn to_buf(&self, buf: &mut [u8]) {
+        match self {
+            Self::Id(id) => buf[..2].copy_from_slice(&id.to_be_bytes()),
+            Self::ShortName(short_name) => buf[..2].copy_from_slice(short_name),
+            Self::LongName(long_name) => {
+                (&mut buf[..long_name.len()]).copy_from_slice(long_name.as_bytes())
+            }
         }
     }
 }

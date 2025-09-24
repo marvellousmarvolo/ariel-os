@@ -1,5 +1,7 @@
 use bilge::prelude::*;
 
+use crate::Topic;
+
 #[bitsize(2)]
 #[derive(FromBits, Debug)]
 pub enum QoS {
@@ -19,6 +21,16 @@ pub enum TopicIdType {
     IdNormal = 0b00,
     IdPredefined = 0b01,
     ShortName = 0b10,
+}
+
+impl From<&Topic> for TopicIdType {
+    fn from(topic: &Topic) -> Self {
+        match topic {
+            Topic::Id(_) => TopicIdType::IdPredefined,
+            Topic::ShortName(_) => TopicIdType::ShortName,
+            Topic::LongName(_) => TopicIdType::IdNormal,
+        }
+    }
 }
 
 #[bitsize(8)]
