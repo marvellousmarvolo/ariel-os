@@ -1,5 +1,7 @@
 use crate::{
-    header::{Header, MsgType},
+    Topic,
+    flags::{Flags, TopicIdType},
+    header::{Header, MsgType, calculate_message_length},
     message_variable_part as mvp,
     packet::Error::{PacketNotRecognized, ParsingFailed},
 };
@@ -37,7 +39,7 @@ pub enum Packet<'a> {
     Subscribe {
         header: Header,
         subscribe: mvp::Subscribe,
-        topic: &'a [u8], // long name, short name, id
+        topic: &'a Topic,
     },
     SubAck {
         header: Header,
@@ -58,19 +60,23 @@ pub enum Packet<'a> {
 }
 
 macro_rules! construct_buffer {
-    ($buf:tt, $header: tt, $mvp: tt, $mvp_len:expr) => {
+    ($buf:tt, $header: tt, $mvp: tt, $mvp_len:expr) => {{
         let mvp_size = $header.size() + $mvp_len;
 
         $buf[..$header.size()].copy_from_slice(&$header.to_be_bytes()[..$header.size()]);
         $buf[$header.size()..mvp_size].copy_from_slice(&$mvp.to_be_bytes()[..$mvp_len]);
-    };
-    ($buf:tt, $header: tt, $mvp: tt, $mvp_len:expr, $payload: tt) => {
+
+        mvp_size
+    }};
+    ($buf:tt, $header: tt, $mvp: tt, $mvp_len:expr, $payload: tt) => {{
         construct_buffer!($buf, $header, $mvp, $mvp_len);
 
         let mvp_size = $header.size() + $mvp_len;
 
         $buf[mvp_size..$header.length()].copy_from_slice($payload);
-    };
+
+        mvp_size
+    }};
 }
 
 pub enum Error {
@@ -152,20 +158,20 @@ impl Packet<'_> {
             // MsgType::PubComp => {}
             // MsgType::PubRec => {}
             // MsgType::PubRel => {}
-            MsgType::Subscribe => {
-                let mvp_size = header.size() + mvp::Subscribe::SIZE;
+            // MsgType::Subscribe => {
+            //     let mvp_size = header.size() + mvp::Subscribe::SIZE;
 
-                let mvp: [u8; mvp::Subscribe::SIZE] =
-                    bytes[header.size()..mvp_size].try_into().unwrap();
+            //     let mvp: [u8; mvp::Subscribe::SIZE] =
+            //         bytes[header.size()..mvp_size].try_into().unwrap();
 
-                let subscribe = mvp::Subscribe::try_from(u24::from_be_bytes(mvp)).unwrap();
+            //     let subscribe = mvp::Subscribe::try_from(u24::from_be_bytes(mvp)).unwrap();
 
-                Ok(Packet::Subscribe {
-                    header,
-                    subscribe,
-                    topic: &bytes[mvp_size..],
-                })
-            }
+            //     Ok(Packet::Subscribe {
+            //         header,
+            //         subscribe,
+            //         topic: Topic::from_bytes(&bytes[mvp_size..]),
+            //     })
+            // }
             MsgType::SubAck => {
                 let mvp_size = header.size() + mvp::SubAck::SIZE;
 
@@ -197,7 +203,7 @@ impl Packet<'_> {
         }
     }
     //
-    pub fn write_to_buf(&self, buf: &mut [u8]) {
+    pub fn write_to_buf<'a>(&self, buf: &'a mut [u8]) -> &'a [u8] {
         match self {
             // MsgType::Advertise => {}
             // Packet::SearchGw { header, search_gw } => {
@@ -243,7 +249,8 @@ impl Packet<'_> {
                 subscribe,
                 topic,
             } => {
-                construct_buffer!(buf, header, subscribe, mvp::Subscribe::SIZE, topic);
+                let written = construct_buffer!(buf, header, subscribe, mvp::Subscribe::SIZE);
+                topic.to_buf(&mut buf[written..]);
             }
             // MsgType::SubAck => {} // no send
             // MsgType::Unsubscribe => {}
@@ -262,6 +269,7 @@ impl Packet<'_> {
                 info!("Packet not recognized");
             }
         }
+        &buf[..self.length()]
     }
 
     pub fn get_msg_type(&self) -> MsgType {
@@ -275,6 +283,51 @@ impl Packet<'_> {
             Packet::SubAck { header, .. } => header.msg_type(),
             Packet::PingReq { header, .. } => header.msg_type(),
             Packet::PingResp { header, .. } => header.msg_type(),
+        }
+    }
+
+    pub fn length(&self) -> usize {
+        match self {
+            Packet::Connect { header, .. } => header.length(),
+            Packet::ConnAck { header, .. } => header.length(),
+            Packet::Register { header, .. } => header.length(),
+            Packet::RegAck { header, .. } => header.length(),
+            Packet::Publish { header, .. } => header.length(),
+            Packet::Subscribe { header, .. } => header.length(),
+            Packet::SubAck { header, .. } => header.length(),
+            Packet::PingReq { header, .. } => header.length(),
+            Packet::PingResp { header, .. } => header.length(),
+        }
+    }
+}
+
+// packet creation methods
+impl Packet<'_> {
+    pub(crate) fn connect(client_id: &[u8], flags: crate::flags::Flags) -> Packet {
+        let msg_len = calculate_message_length(client_id.len(), mvp::Connect::SIZE);
+
+        Packet::Connect {
+            header: Header::new(MsgType::Connect, msg_len),
+            connect: mvp::Connect::new(0x00, 0x01, flags),
+            client_id,
+        }
+    }
+
+    pub(crate) fn subscribe<'a>(
+        topic: &'a crate::Topic,
+        dup: bool,
+        qos: crate::flags::QoS,
+        msg_id: u16,
+    ) -> Packet<'a> {
+        let flags = Flags::new(topic.into(), true, false, false, qos, dup);
+        let msg_len = calculate_message_length(topic.len(), mvp::Subscribe::SIZE);
+
+        trace!("msg_len: {}", &msg_len);
+
+        Packet::Subscribe {
+            header: Header::new(MsgType::Subscribe, msg_len),
+            subscribe: mvp::Subscribe::new(msg_id, flags),
+            topic: &topic,
         }
     }
 }
