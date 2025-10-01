@@ -17,6 +17,7 @@ async fn mqtt_sn_test() {
         .spawn(ariel_os_mqttsn_async::client())
         .unwrap();
     info!("mqtt_sn_test()");
+    
     ACTION_CHANNEL
         .send(Action::Subscribe(Topic::from_long("my_topic")))
         .await;

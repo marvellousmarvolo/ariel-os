@@ -1,6 +1,6 @@
 use crate::{
     Topic,
-    flags::{Flags, TopicIdType},
+    flags::{Flags, TopicIdType, QoS},
     header::{Header, MsgType, calculate_message_length},
     message_variable_part as mvp,
     packet::Error::{PacketNotRecognized, ParsingFailed},
@@ -303,7 +303,17 @@ impl Packet<'_> {
 
 // packet creation methods
 impl Packet<'_> {
-    pub(crate) fn connect(client_id: &[u8], flags: crate::flags::Flags) -> Packet {
+    pub(crate) fn connect(clean_session: bool, will: bool, client_id: &[u8]) -> Packet<'_> {
+        // build "connect" packet
+        let flags = Flags::new(
+            TopicIdType::IdNormal,
+            clean_session,
+            will,
+            false,
+            QoS::Zero,
+            false,
+        );
+
         let msg_len = calculate_message_length(client_id.len(), mvp::Connect::SIZE);
 
         Packet::Connect {
@@ -328,6 +338,28 @@ impl Packet<'_> {
             header: Header::new(MsgType::Subscribe, msg_len),
             subscribe: mvp::Subscribe::new(msg_id, flags),
             topic: &topic,
+        }
+    }
+
+    pub(crate) fn publish<'a>(
+        topic: &'a crate::Topic,
+        qos: crate::flags::QoS,
+        payload: &'a [u8],
+    ) -> Packet<'a> {
+        let (topic_id_type, topic_value) = match topic {
+            Topic::ShortName(name) => (TopicIdType::ShortName, &u16::from_be_bytes(*name)),
+            Topic::Id(id) => (TopicIdType::IdPredefined, id),
+            Topic::LongName(_) => panic!(),
+        };
+
+        let flags = Flags::new(topic_id_type, false, false, false, qos, false);
+
+        let length = calculate_message_length(payload.len(), mvp::Publish::SIZE);
+
+        Packet::Publish {
+            header: Header::new(MsgType::Publish, length),
+            publish: mvp::Publish::new(0x0000u16, *topic_value, flags), // msg_id 0x0000 on QoS 0 & -1
+            data: payload,
         }
     }
 }
