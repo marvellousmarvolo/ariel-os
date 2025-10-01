@@ -61,6 +61,10 @@ pub struct ConnAck {
 
 impl ConnAck {
     pub const SIZE: usize = 1;
+
+    pub fn get_return_code(&self) -> ReturnCode {
+        self.return_code()
+    }
 }
 
 // pub struct WillTopicReq {}
