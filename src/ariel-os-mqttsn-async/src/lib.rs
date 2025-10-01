@@ -17,7 +17,7 @@ use embassy_futures::select::{Either, select};
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
-    channel::{Channel, Receiver},
+    channel::{Channel, Receiver, Sender},
     mutex::Mutex,
     once_lock::OnceLock,
     pubsub::PubSubChannel,
@@ -38,7 +38,11 @@ pub const MAX_TOPIC_LENGTH: usize = 64; // !usize_from_env_or()
 
 // static SOCKET: OnceLock<MqttsnSocket> = OnceLock::new();
 // static MESSAGE_CHANNEL: MessageChannel = Channel<CriticalSectionRawMutex, Message, 1> = Channel::new();
-pub static ACTION_CHANNEL: Channel<CriticalSectionRawMutex, Action, 1> = Channel::new();
+pub static ACTION_REQUEST_CHANNEL: ActionRequestChannel<'_> = Channel::new();
+
+pub type ActionRequestChannel<'ch> = Channel<CriticalSectionRawMutex, ActionRequest<'ch>, 1>;
+pub type ActionReplyChannel = Channel<CriticalSectionRawMutex, ActionReply, 1>;
+pub type ActionReplySender<'a> = Sender<'a, CriticalSectionRawMutex, ActionReply, 1>;
 
 // static HANDLERS: Mutex<CriticalSectionRawMutex, [MessageChannel; MAX_PUBLISHERS]> = Mutex::new([]);
 // static SUBSCRIPTIONS: Mutex<CriticalSectionRawMutex, [(u16, u16); MAX_PUBLISHERS]> = Mutex::new([]);
@@ -51,9 +55,21 @@ pub enum Message {
 }
 
 #[derive(Clone)]
+pub struct ActionRequest<'ch> {
+    pub action: Action,
+    pub reply_tx: ActionReplySender<'ch>,
+}
+
+#[derive(Clone)]
 pub enum Action {
     Subscribe(Topic),
     Publish { topic: Topic, payload: Payload },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ActionReply {
+    Ok(),
+    Err(Error),
 }
 
 #[derive(PartialEq, Default, Debug, defmt::Format)]
@@ -63,7 +79,7 @@ enum State {
     Active,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, PartialEq, defmt::Format)]
 pub enum Error {
     InvalidState,
     Timeout,
@@ -80,14 +96,40 @@ pub enum Topic {
     LongName(String<MAX_TOPIC_LENGTH>),
 }
 
-pub struct MqttsnConnection<'a> {
+pub struct MqttsnConnection<'a, 'ch> {
     stack: net::NetworkStack,
     state: State,
     local: SocketAddr,
     remote: SocketAddr,
     socket: udp_nal::UnconnectedUdp<'a>,
-    action_rx: Receiver<'a, CriticalSectionRawMutex, Action, 1>,
+    action_rx: Receiver<'a, CriticalSectionRawMutex, ActionRequest<'ch>, 1>,
     msg_id: u16,
+}
+
+pub struct MqttClient {
+    action_reply_channel: ActionReplyChannel,
+}
+
+impl MqttClient {
+    pub const fn new() -> Self {
+        Self {
+            action_reply_channel: ActionReplyChannel::new(),
+        }
+    }
+
+    pub async fn subscribe(&'static self, topic: Topic) -> Result<(), Error> {
+        ACTION_REQUEST_CHANNEL
+            .send(ActionRequest {
+                action: Action::Subscribe(topic),
+                reply_tx: self.action_reply_channel.sender(),
+            })
+            .await;
+        let res = self.action_reply_channel.receive().await;
+        match res {
+            ActionReply::Ok() => Ok(()),
+            ActionReply::Err(e) => Err(e),
+        }
+    }
 }
 
 trait MqttPacketReceive {
@@ -109,7 +151,22 @@ impl MqttPacketReceive for udp_nal::UnconnectedUdp<'_> {
     }
 }
 
-impl<'a> MqttsnConnection<'a> {
+impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
+    async fn handle_action_request(
+        &mut self,
+        action_request: ActionRequest<'_>,
+    ) -> Result<(), Error> {
+        let ActionRequest { action, reply_tx } = action_request;
+        let reply = match self.handle_action(action).await {
+            Ok(_) => ActionReply::Ok(),
+            Err(e) => ActionReply::Err(e),
+        };
+
+        reply_tx.send(reply).await;
+
+        Ok(())
+    }
+
     async fn handle_action(&mut self, action: Action) -> Result<(), Error> {
         match action {
             Action::Subscribe(topic) => {
@@ -181,9 +238,9 @@ impl<'a> MqttsnConnection<'a> {
                     self.handle_packet(packet).await.unwrap();
                 }
                 Either::First(Err(_)) => todo!(),
-                Either::Second(action) => {
+                Either::Second(action_request) => {
                     info!("got action");
-                    self.handle_action(action).await.unwrap();
+                    self.handle_action_request(action_request).await.unwrap();
                 }
             }
         }
@@ -312,7 +369,7 @@ impl<'a> MqttsnConnection<'a> {
 pub async fn client() {
     let stack = net::network_stack().await.unwrap();
     let local = "0.0.0.0:1234".parse().unwrap();
-    let remote: SocketAddr = "10.42.0.1:1884".parse().unwrap();
+    let remote: SocketAddr = "192.168.1.236:1884".parse().unwrap();
 
     let mut rx_meta = [PacketMetadata::EMPTY; 16];
     let mut rx_buffer = [0; 4096];
@@ -331,7 +388,7 @@ pub async fn client() {
         .await
         .unwrap();
 
-    let action_rx = ACTION_CHANNEL.receiver();
+    let action_rx = ACTION_REQUEST_CHANNEL.receiver();
     let mut connection = MqttsnConnection {
         msg_id: 0,
         stack,
