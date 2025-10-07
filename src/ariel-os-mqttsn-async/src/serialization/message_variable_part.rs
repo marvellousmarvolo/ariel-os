@@ -1,4 +1,4 @@
-use crate::flags::Flags;
+use crate::serialization::flags::Flags;
 use ariel_os::debug::log::defmt;
 use bilge::prelude::*;
 
