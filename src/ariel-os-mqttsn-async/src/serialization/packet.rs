@@ -1,9 +1,11 @@
 use crate::{
     Topic,
-    flags::{Flags, TopicIdType, QoS},
-    header::{Header, MsgType, calculate_message_length},
-    message_variable_part as mvp,
-    packet::Error::{PacketNotRecognized, ParsingFailed},
+    serialization::{
+        flags::{Flags, QoS, TopicIdType},
+        header::{Header, MsgType, calculate_message_length},
+        message_variable_part as mvp,
+        packet::Error::{PacketNotRecognized, ParsingFailed},
+    },
 };
 use ariel_os::debug::log::*;
 use bilge::arbitrary_int::{u24, u40, u48};
@@ -326,7 +328,7 @@ impl Packet<'_> {
     pub(crate) fn subscribe<'a>(
         topic: &'a crate::Topic,
         dup: bool,
-        qos: crate::flags::QoS,
+        qos: QoS,
         msg_id: u16,
     ) -> Packet<'a> {
         let flags = Flags::new(topic.into(), true, false, false, qos, dup);
@@ -343,7 +345,7 @@ impl Packet<'_> {
 
     pub(crate) fn publish<'a>(
         topic: &'a crate::Topic,
-        qos: crate::flags::QoS,
+        qos: QoS,
         payload: &'a [u8],
     ) -> Packet<'a> {
         let (topic_id_type, topic_value) = match topic {

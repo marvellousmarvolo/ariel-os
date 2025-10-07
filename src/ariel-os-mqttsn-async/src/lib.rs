@@ -1,19 +1,14 @@
 #![no_std]
-pub mod flags;
-mod header;
-mod message_variable_part;
-mod packet;
+pub mod serialization;
 pub mod udp_nal;
 
-use crate::flags::{QoS, TopicIdType};
-use crate::message_variable_part::{ConnAck, ReturnCode};
 use ariel_os::net;
 use ariel_os::reexports::embassy_time::WithTimeout; // TODO: when rebased, change to ariel_os::time::with_timeout
 use ariel_os::time::Duration;
 use ariel_os::{debug::log::*, reexports::embassy_time::TimeoutError};
 use core::{default::Default, net::SocketAddr};
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either3, select3};
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
@@ -23,11 +18,13 @@ use embassy_sync::{
     pubsub::PubSubChannel,
 };
 use embedded_nal_async::UnconnectedUdp;
-use header::{Header, HeaderLong, HeaderShort, MsgType};
 use heapless::String;
-use packet::Packet;
-
-use message_variable_part as mvp;
+use serialization::{
+    flags::{Flags, QoS, TopicIdType},
+    header::{Header, HeaderLong, HeaderShort, MsgType},
+    message_variable_part::{ConnAck, ReturnCode},
+    packet::Packet,
+};
 
 pub const MAX_PAYLOAD_SIZE: usize = 1024; // !usize_from_env_or()
 
@@ -36,20 +33,17 @@ pub const MAX_TOPIC_LENGTH: usize = 64; // !usize_from_env_or()
 
 // type MessageChannel = PubSubChannel<CriticalSectionRawMutex, Message, 1, 1, MAX_PUBLISHERS>;
 
-// static SOCKET: OnceLock<MqttsnSocket> = OnceLock::new();
-// static MESSAGE_CHANNEL: MessageChannel = Channel<CriticalSectionRawMutex, Message, 1> = Channel::new();
-pub static ACTION_REQUEST_CHANNEL: ActionRequestChannel<'_> = Channel::new();
-
+type Payload = [u8; MAX_PAYLOAD_SIZE];
 type ActionReply = Result<(), Error>;
 
 pub type ActionRequestChannel<'ch> = Channel<CriticalSectionRawMutex, ActionRequest<'ch>, 1>;
 pub type ActionReplyChannel = Channel<CriticalSectionRawMutex, ActionReply, 1>;
 pub type ActionReplySender<'a> = Sender<'a, CriticalSectionRawMutex, ActionReply, 1>;
 
+// static MESSAGE_CHANNEL: MessageChannel = Channel<CriticalSectionRawMutex, Message, 1> = Channel::new();
+pub static ACTION_REQUEST_CHANNEL: ActionRequestChannel<'_> = Channel::new();
 // static HANDLERS: Mutex<CriticalSectionRawMutex, [MessageChannel; MAX_PUBLISHERS]> = Mutex::new([]);
 // static SUBSCRIPTIONS: Mutex<CriticalSectionRawMutex, [(u16, u16); MAX_PUBLISHERS]> = Mutex::new([]);
-
-type Payload = [u8; MAX_PAYLOAD_SIZE];
 
 #[derive(Clone)]
 pub enum Message {
@@ -90,6 +84,39 @@ pub enum Topic {
     Id(u16),
     ShortName([u8; 2]),
     LongName(String<MAX_TOPIC_LENGTH>),
+}
+
+impl Topic {
+    pub fn from_short(short_name: [u8; 2]) -> Topic {
+        Self::ShortName(short_name)
+    }
+
+    pub fn from_id(id: u16) -> Topic {
+        Self::Id(id)
+    }
+
+    pub fn from_long(long_name: &str) -> Topic {
+        // TODO: make fallible
+        Self::LongName(String::try_from(long_name).unwrap())
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Id(_id) => 2,
+            Self::ShortName(_short_name) => 2,
+            Self::LongName(long_name) => long_name.len(),
+        }
+    }
+
+    fn to_buf(&self, buf: &mut [u8]) {
+        match self {
+            Self::Id(id) => buf[..2].copy_from_slice(&id.to_be_bytes()),
+            Self::ShortName(short_name) => buf[..2].copy_from_slice(short_name),
+            Self::LongName(long_name) => {
+                (&mut buf[..long_name.len()]).copy_from_slice(long_name.as_bytes())
+            }
+        }
+    }
 }
 
 pub struct MqttClient {
@@ -201,33 +228,40 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
     async fn run(&mut self) {
         // TODO: handle errors
         loop {
-            match self.connect(60000, b"ariel", false, false).await {
-                Ok(_) => break,
-                Err(e) => match e {
-                    Error::Timeout => info!("TIMEOUT ERROR"),
-                    Error::TransmissionFailed => info!("TRANSMISSION ERROR"),
-                    _ => info!("OTHER ERROR"),
-                },
-            }
-        }
-
-        // TODO: "32" is arbitrary, check MAX_PAYLOAD_SIZE and add appropriate header length
-        let mut rx_buf = [0; MAX_PAYLOAD_SIZE + 32];
-        loop {
-            match select(
-                self.socket.receive_packet(&mut rx_buf),
-                self.action_rx.receive(),
-            )
-            .await
-            {
-                Either::First(Ok(packet)) => {
-                    info!("got packet");
-                    self.handle_packet(packet).await.unwrap();
+            while self.state == State::Disconnected {
+                if let Err(e) = self.connect(60000, b"ariel", false, false).await {
+                    match e {
+                        Error::Timeout => info!("TIMEOUT ERROR"),
+                        Error::TransmissionFailed => info!("TRANSMISSION ERROR"),
+                        _ => info!("OTHER ERROR"),
+                    }
                 }
-                Either::First(Err(_)) => todo!(),
-                Either::Second(action_request) => {
-                    info!("got action");
-                    self.handle_action_request(action_request).await.unwrap();
+            }
+
+            // TODO: "32" is arbitrary, check MAX_PAYLOAD_SIZE and add appropriate header length
+            let mut rx_buf = [0; MAX_PAYLOAD_SIZE + 32];
+            loop {
+                match select3(
+                    self.socket.receive_packet(&mut rx_buf),
+                    self.action_rx.receive(),
+                    self.stack.wait_config_down(),
+                )
+                .await
+                {
+                    Either3::First(Ok(packet)) => {
+                        info!("got packet");
+                        self.handle_packet(packet).await.unwrap();
+                    }
+                    Either3::First(Err(_)) => todo!(),
+                    Either3::Second(action_request) => {
+                        info!("got action");
+                        self.handle_action_request(action_request).await.unwrap();
+                    }
+                    Either3::Third(_) => {
+                        info!("got config down");
+                        self.state = State::Disconnected;
+                        break;
+                    }
                 }
             }
         }
@@ -247,7 +281,6 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         will: bool,
         clean_session: bool,
     ) -> Result<(), Error> {
-        use flags::{Flags, QoS, TopicIdType};
         info!("connect");
         self.check_state(State::Disconnected)?;
         let mut buf: [u8; MAX_PAYLOAD_SIZE + 32] = [0; MAX_PAYLOAD_SIZE + 32];
@@ -332,7 +365,8 @@ pub async fn client() {
     let stack = net::network_stack().await.unwrap();
     stack.wait_config_up().await;
     let local = "0.0.0.0:1234".parse().unwrap();
-    let remote = SocketAddr::new(stack.config_v4().unwrap().gateway.unwrap().into(), 1884);
+    let remote = "192.168.1.236:1884".parse().unwrap();
+    //let remote = SocketAddr::new(stack.config_v4().unwrap().gateway.unwrap().into(), 1884);
 
     let mut rx_meta = [PacketMetadata::EMPTY; 16];
     let mut rx_buffer = [0; 4096];
@@ -363,39 +397,6 @@ pub async fn client() {
     };
 
     connection.run().await;
-}
-
-impl Topic {
-    pub fn from_short(short_name: [u8; 2]) -> Topic {
-        Self::ShortName(short_name)
-    }
-
-    pub fn from_id(id: u16) -> Topic {
-        Self::Id(id)
-    }
-
-    pub fn from_long(long_name: &str) -> Topic {
-        // TODO: make fallible
-        Self::LongName(String::try_from(long_name).unwrap())
-    }
-
-    pub fn len(&self) -> usize {
-        match self {
-            Self::Id(_id) => 2,
-            Self::ShortName(_short_name) => 2,
-            Self::LongName(long_name) => long_name.len(),
-        }
-    }
-
-    fn to_buf(&self, buf: &mut [u8]) {
-        match self {
-            Self::Id(id) => buf[..2].copy_from_slice(&id.to_be_bytes()),
-            Self::ShortName(short_name) => buf[..2].copy_from_slice(short_name),
-            Self::LongName(long_name) => {
-                (&mut buf[..long_name.len()]).copy_from_slice(long_name.as_bytes())
-            }
-        }
-    }
 }
 
 // async fn ping() -> Result<(), Error> {
