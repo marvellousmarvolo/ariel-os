@@ -6,7 +6,7 @@ mod packet;
 pub mod udp_nal;
 
 use crate::flags::{QoS, TopicIdType};
-use crate::message_variable_part::ReturnCode;
+use crate::message_variable_part::{ConnAck, ReturnCode};
 use ariel_os::net;
 use ariel_os::reexports::embassy_time::WithTimeout; // TODO: when rebased, change to ariel_os::time::with_timeout
 use ariel_os::time::Duration;
@@ -40,6 +40,8 @@ pub const MAX_TOPIC_LENGTH: usize = 64; // !usize_from_env_or()
 // static MESSAGE_CHANNEL: MessageChannel = Channel<CriticalSectionRawMutex, Message, 1> = Channel::new();
 pub static ACTION_REQUEST_CHANNEL: ActionRequestChannel<'_> = Channel::new();
 
+type ActionReply = Result<(), Error>;
+
 pub type ActionRequestChannel<'ch> = Channel<CriticalSectionRawMutex, ActionRequest<'ch>, 1>;
 pub type ActionReplyChannel = Channel<CriticalSectionRawMutex, ActionReply, 1>;
 pub type ActionReplySender<'a> = Sender<'a, CriticalSectionRawMutex, ActionReply, 1>;
@@ -66,12 +68,6 @@ pub enum Action {
     Publish { topic: Topic, payload: Payload },
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum ActionReply {
-    Ok(),
-    Err(Error),
-}
-
 #[derive(PartialEq, Default, Debug, defmt::Format)]
 enum State {
     #[default]
@@ -96,16 +92,6 @@ pub enum Topic {
     LongName(String<MAX_TOPIC_LENGTH>),
 }
 
-pub struct MqttsnConnection<'a, 'ch> {
-    stack: net::NetworkStack,
-    state: State,
-    local: SocketAddr,
-    remote: SocketAddr,
-    socket: udp_nal::UnconnectedUdp<'a>,
-    action_rx: Receiver<'a, CriticalSectionRawMutex, ActionRequest<'ch>, 1>,
-    msg_id: u16,
-}
-
 pub struct MqttClient {
     action_reply_channel: ActionReplyChannel,
 }
@@ -124,11 +110,7 @@ impl MqttClient {
                 reply_tx: self.action_reply_channel.sender(),
             })
             .await;
-        let res = self.action_reply_channel.receive().await;
-        match res {
-            ActionReply::Ok() => Ok(()),
-            ActionReply::Err(e) => Err(e),
-        }
+        self.action_reply_channel.receive().await
     }
 }
 
@@ -140,7 +122,7 @@ impl MqttPacketReceive for udp_nal::UnconnectedUdp<'_> {
     async fn receive_packet<'b>(&mut self, buf: &'b mut [u8]) -> Result<Packet<'b>, Error> {
         match self.receive_into(buf).await {
             Ok((n, _, _)) => {
-                info!("Bytes: {:?}", &buf[..n]);
+                debug!("Bytes: {:?}", &buf[..n]);
                 match Packet::try_from(&buf[..n]) {
                     Ok(packet) => Ok(packet),
                     Err(_) => Err(Error::ConversionFailed),
@@ -151,16 +133,23 @@ impl MqttPacketReceive for udp_nal::UnconnectedUdp<'_> {
     }
 }
 
+pub struct MqttsnConnection<'a, 'ch> {
+    stack: net::NetworkStack,
+    state: State,
+    local: SocketAddr,
+    remote: SocketAddr,
+    socket: udp_nal::UnconnectedUdp<'a>,
+    action_rx: Receiver<'a, CriticalSectionRawMutex, ActionRequest<'ch>, 1>,
+    msg_id: u16,
+}
+
 impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
     async fn handle_action_request(
         &mut self,
         action_request: ActionRequest<'_>,
     ) -> Result<(), Error> {
         let ActionRequest { action, reply_tx } = action_request;
-        let reply = match self.handle_action(action).await {
-            Ok(_) => ActionReply::Ok(),
-            Err(e) => ActionReply::Err(e),
-        };
+        let reply = self.handle_action(action).await;
 
         reply_tx.send(reply).await;
 
@@ -172,6 +161,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
             Action::Subscribe(topic) => {
                 info!("subscribe");
                 self.subscribe(topic, false, QoS::Zero).await?;
+                // save Topic ID
             }
             Action::Publish { topic, payload } => {
                 info!("publish");
@@ -183,10 +173,6 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
 
     async fn handle_packet(&mut self, packet: Packet<'_>) -> Result<(), Error> {
         match packet {
-            Packet::ConnAck { header, conn_ack } => {
-                // remove here?
-                info!("ConnAck {:?}", conn_ack.get_return_code())
-            }
             Packet::RegAck { header, reg_ack } => info!("RegAck {:?}", reg_ack.get_return_code()),
             Packet::Publish {
                 header,
@@ -213,15 +199,16 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
     }
 
     async fn run(&mut self) {
-        self.stack.wait_config_up().await;
-        // TODO: loop, handle errors
-        match self.connect(60000, b"ariel", false, false).await {
-            Ok(_) => (),
-            Err(e) => match e {
-                Error::Timeout => info!("TIMEOUT ERROR"),
-                Error::TransmissionFailed => info!("TRANSMISSION ERROR"),
-                _ => info!("OTHER ERROR"),
-            },
+        // TODO: handle errors
+        loop {
+            match self.connect(60000, b"ariel", false, false).await {
+                Ok(_) => break,
+                Err(e) => match e {
+                    Error::Timeout => info!("TIMEOUT ERROR"),
+                    Error::TransmissionFailed => info!("TRANSMISSION ERROR"),
+                    _ => info!("OTHER ERROR"),
+                },
+            }
         }
 
         // TODO: "32" is arbitrary, check MAX_PAYLOAD_SIZE and add appropriate header length
@@ -270,25 +257,28 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         {
             info!("connect: send");
             let packet_slice = packet.write_to_buf(&mut buf);
-            self.send(packet_slice).await?;
+            self.send_packet(packet_slice).await?;
         }
 
-        // Ok(())
-
-        // TODO: move into central handler -> run()
         info!("connect: recv");
         // wait for connack
         match self
-            .receive(&mut buf)
+            .socket
+            .receive_packet(&mut buf)
             .with_timeout(Duration::from_millis(duration_millis as u64))
             .await
-            .map_err(|_| Error::Timeout)?
-            .map(|res| res.get_msg_type())?
+            .map_err(|_| Error::Timeout)??
         {
-            MsgType::ConnAck => {
-                self.state = State::Active;
-                Ok(())
-            }
+            Packet::ConnAck { header, conn_ack } => match conn_ack.get_return_code() {
+                ReturnCode::Accepted => {
+                    self.state = State::Active;
+                    info!("connected");
+                    Ok(())
+                }
+                ReturnCode::RejectedCongestion => todo!(),
+                ReturnCode::RejectedInvalidTopicId => todo!(),
+                ReturnCode::RejectedNotSupported => todo!(),
+            },
             _ => {
                 info!("Transmission failed!");
                 Err(Error::TransmissionFailed)
@@ -307,27 +297,11 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
 
         {
             let packet_slice = packet.write_to_buf(&mut buf);
-            self.send(packet_slice).await?;
+            self.send_packet(packet_slice).await?;
         }
 
         self.msg_id += 1;
         Ok(())
-
-        // match self
-        //     .receive(&mut buf)
-        //     .with_timeout(Duration::from_millis(60000))
-        //     .await
-        // {
-        //     Ok(res) => match res? {
-        //         Packet::SubAck { header: _, sub_ack } => {
-        //             let topic_id = sub_ack.get_topic_id();
-        //             info!("received Topic Id {:?} for Topic {:?}", topic_id, topic);
-        //             Ok(Topic::from_id(topic_id))
-        //         }
-        //         _ => Err(Error::TransmissionFailed),
-        //     },
-        //     Err(_) => Err(Error::Timeout),
-        // }
     }
 
     pub async fn publish(&mut self, topic: Topic, payload: &[u8]) -> Result<(), Error> {
@@ -339,27 +313,15 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
 
         {
             let packet_slice = packet.write_to_buf(&mut buf);
-            self.send(packet_slice).await?;
+            self.send_packet(packet_slice).await?;
         }
 
         Ok(())
     }
 
-    async fn send(&mut self, buf: &[u8]) -> Result<(), Error> {
+    async fn send_packet(&mut self, buf: &[u8]) -> Result<(), Error> {
         match self.socket.send(self.local, self.remote, &buf).await {
             Ok(_) => Ok(()),
-            Err(_) => Err(Error::TransmissionFailed),
-        }
-    }
-    async fn receive<'b>(&mut self, buf: &'b mut [u8]) -> Result<Packet<'b>, Error> {
-        match self.socket.receive_into(buf).await {
-            Ok((n, _, _)) => {
-                info!("Bytes: {:?}", &buf[..n]);
-                match Packet::try_from(&buf[..n]) {
-                    Ok(packet) => Ok(packet),
-                    Err(_) => Err(Error::ConversionFailed),
-                }
-            }
             Err(_) => Err(Error::TransmissionFailed),
         }
     }
@@ -368,8 +330,9 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
 #[embassy_executor::task]
 pub async fn client() {
     let stack = net::network_stack().await.unwrap();
+    stack.wait_config_up().await;
     let local = "0.0.0.0:1234".parse().unwrap();
-    let remote: SocketAddr = "192.168.1.236:1884".parse().unwrap();
+    let remote = SocketAddr::new(stack.config_v4().unwrap().gateway.unwrap().into(), 1884);
 
     let mut rx_meta = [PacketMetadata::EMPTY; 16];
     let mut rx_buffer = [0; 4096];
@@ -435,19 +398,6 @@ impl Topic {
     }
 }
 
-// async fn send(buf: &[u8], length: u16) -> Result<(), Error> {
-//     let socket = SOCKET.get().await;
-
-//     match socket
-//         .socket
-//         .send(socket.local, socket.remote, &buf[..length as usize])
-//         .await
-//     {
-//         Ok(_) => Ok(()),
-//         Err(_) => Err(Error::TransmissionFailed),
-//     };
-// }
-
 // async fn ping() -> Result<(), Error> {
 //     const MSG_LEN: u16 = 16;
 //     let packet = Packet::PingResp {
@@ -457,75 +407,4 @@ impl Topic {
 //     packet.write_to_buf(send_buf);
 //     send(send_buf, MSG_LEN).await?;
 //     Ok(())
-// }
-
-// pub async fn init(
-//     max_buffer_size: u16,
-//     client_id: &[u8],
-//     socket: MqttsnSocket<'_>,
-// ) -> Result<(), Error> {
-//     // Initialize Buffer Size, Global Lists, Socket
-//     // MQTT-SN Connect
-//     // Start Client Task
-// }
-
-// #[embassy_executor::task]
-// async fn client() {
-//     loop {
-//         let mut buf = [0u8; MAX_PAYLOAD_SIZE + 32];
-
-//         match receive(&mut buf).await {
-//             Ok(packet) => match packet {
-//                 Packet::Publish {
-//                     header: _,
-//                     publish,
-//                     data,
-//                 } => {
-//                     let topic_id = publish.get_topic_id();
-
-//                     SUBSCRIPTIONS.lock().await.map(|subs| async {
-//                         if subs.0 == topic_id {
-//                             for i in 0..16u16 {
-//                                 // check if bit is set in handler bitmap
-//                                 if subs.1 & (1 << i) != 0 {
-//                                     let handlers = HANDLERS.lock().await;
-//                                     let handler: MessageChannel = handlers[i as usize];
-//                                     handler.publisher().unwrap().publish_immediate(
-//                                         Message::Publish {
-//                                             topic: topic_id,
-//                                             payload: data,
-//                                         },
-//                                     );
-//                                 }
-//                             }
-//                         }
-//                     });
-//                     continue;
-//                 }
-//                 Packet::PingReq { .. } => match ping().await {
-//                     Ok(_) => continue,
-//                     Err(_) => (), // handle Error
-//                 },
-//                 _ => {
-//                     info!("Conversion error");
-//                     continue;
-//                 }
-//             },
-//             Err(_) => {
-//                 info!("Packet not recognized");
-//                 continue;
-//             }
-//         }
-//     }
-// }
-
-// fn calculate_message_length(payload_len: usize, mvp_byte_len: usize) -> u16 {
-//     use bilge::Bitsized;
-//     let mvp_len = payload_len + mvp_byte_len;
-
-//     if (mvp_len + HeaderShort::BITS / 8) > 256 {
-//         (mvp_len + HeaderLong::BITS / 8) as u16
-//     } else {
-//         (mvp_len + HeaderShort::BITS / 8) as u16
-//     }
 // }

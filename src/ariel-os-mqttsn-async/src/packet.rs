@@ -86,11 +86,11 @@ pub enum Error {
 
 impl Packet<'_> {
     pub fn try_from(bytes: &[u8]) -> Result<Packet<'_>, Error> {
-        info!("bytes: {:?}", bytes);
+        debug!("bytes: {:?}", bytes);
 
         let header = Header::try_from(bytes).unwrap();
 
-        info!("header: {:?}", header);
+        debug!("header: {:?}", header);
 
         let msg_type = header.msg_type();
 
