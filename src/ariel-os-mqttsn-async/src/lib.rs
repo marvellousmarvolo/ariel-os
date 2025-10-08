@@ -18,7 +18,7 @@ use embassy_sync::{
     pubsub::PubSubChannel,
 };
 use embedded_nal_async::UnconnectedUdp;
-use heapless::String;
+use heapless::{LinearMap, String};
 use serialization::{
     flags::{Flags, QoS, TopicIdType},
     header::{Header, HeaderLong, HeaderShort, MsgType},
@@ -26,12 +26,12 @@ use serialization::{
     packet::Packet,
 };
 
+use crate::serialization::message_variable_part::Publish;
+
 pub const MAX_PAYLOAD_SIZE: usize = 1024; // !usize_from_env_or()
-
 pub const MAX_TOPIC_LENGTH: usize = 64; // !usize_from_env_or()
-// pub const MAX_PUBLISHERS: usize = 16;
-
-// type MessageChannel = PubSubChannel<CriticalSectionRawMutex, Message, 1, 1, MAX_PUBLISHERS>;
+pub const MAX_SUBSCRIPTIONS: usize = 16;
+pub const MAX_CLIENTS: usize = 4;
 
 type Payload = [u8; MAX_PAYLOAD_SIZE];
 type ActionReply = Result<(), Error>;
@@ -39,11 +39,11 @@ type ActionReply = Result<(), Error>;
 pub type ActionRequestChannel<'ch> = Channel<CriticalSectionRawMutex, ActionRequest<'ch>, 1>;
 pub type ActionReplyChannel = Channel<CriticalSectionRawMutex, ActionReply, 1>;
 pub type ActionReplySender<'a> = Sender<'a, CriticalSectionRawMutex, ActionReply, 1>;
+pub type MessageChannel = Channel<CriticalSectionRawMutex, Message, 1>;
+pub type MessageReceiver = Receiver<'static, CriticalSectionRawMutex, Message, 1>;
+pub type MessageSender = Sender<'static, CriticalSectionRawMutex, Message, 1>;
 
-// static MESSAGE_CHANNEL: MessageChannel = Channel<CriticalSectionRawMutex, Message, 1> = Channel::new();
 pub static ACTION_REQUEST_CHANNEL: ActionRequestChannel<'_> = Channel::new();
-// static HANDLERS: Mutex<CriticalSectionRawMutex, [MessageChannel; MAX_PUBLISHERS]> = Mutex::new([]);
-// static SUBSCRIPTIONS: Mutex<CriticalSectionRawMutex, [(u16, u16); MAX_PUBLISHERS]> = Mutex::new([]);
 
 #[derive(Clone)]
 pub enum Message {
@@ -58,7 +58,7 @@ pub struct ActionRequest<'ch> {
 
 #[derive(Clone)]
 pub enum Action {
-    Subscribe(Topic),
+    Subscribe(Topic, MessageSender),
     Publish { topic: Topic, payload: Payload },
 }
 
@@ -121,19 +121,21 @@ impl Topic {
 
 pub struct MqttClient {
     action_reply_channel: ActionReplyChannel,
+    message_channel: MessageChannel,
 }
 
 impl MqttClient {
     pub const fn new() -> Self {
         Self {
             action_reply_channel: ActionReplyChannel::new(),
+            message_channel: MessageChannel::new(),
         }
     }
 
     pub async fn subscribe(&'static self, topic: Topic) -> Result<(), Error> {
         ACTION_REQUEST_CHANNEL
             .send(ActionRequest {
-                action: Action::Subscribe(topic),
+                action: Action::Subscribe(topic, self.message_channel.sender()),
                 reply_tx: self.action_reply_channel.sender(),
             })
             .await;
@@ -168,6 +170,29 @@ pub struct MqttsnConnection<'a, 'ch> {
     socket: udp_nal::UnconnectedUdp<'a>,
     action_rx: Receiver<'a, CriticalSectionRawMutex, ActionRequest<'ch>, 1>,
     msg_id: u16,
+    topic_map: TopicMap,
+    consumers: ConsumerList,
+}
+
+type TopicMap = LinearMap<u16, u16, MAX_SUBSCRIPTIONS>;
+type ConsumerList = [Option<MessageSender>; MAX_SUBSCRIPTIONS];
+
+trait RegisterSubscriber {
+    fn register_subscriber(&mut self, topic: u16, index: u16) -> Result<(), Error>;
+}
+
+impl RegisterSubscriber for TopicMap {
+    fn register_subscriber(&mut self, topic: u16, index: u16) -> Result<(), Error> {
+        let bit = 1 << index;
+        if let Some(entry) = self.get_mut(&topic) {
+            *entry |= bit;
+            Ok(())
+        } else {
+            self.insert(topic, bit);
+            // TODO: catch map full error
+            Ok(())
+        }
+    }
 }
 
 impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
@@ -185,10 +210,21 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
 
     async fn handle_action(&mut self, action: Action) -> Result<(), Error> {
         match action {
-            Action::Subscribe(topic) => {
+            Action::Subscribe(topic, channel) => {
                 info!("subscribe");
-                self.subscribe(topic, false, QoS::Zero).await?;
-                // save Topic ID
+
+                if let Some((i, entry)) = self
+                    .consumer
+                    .iter_mut()
+                    .enumerate()
+                    .find(|(i, c)| c.is_none())
+                {
+                    *entry.1 = Some(channel);
+                    self.topic_map.register_subscriber(topic, i);
+                    self.subscribe(topic, false, QoS::Zero).await?;
+                } else {
+                    info!("no free consumer slot");
+                }
             }
             Action::Publish { topic, payload } => {
                 info!("publish");
@@ -205,7 +241,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 header,
                 publish,
                 data,
-            } => info!("Publish  {:?}", data),
+            } => self.handle_publish(publish, data).await?,
             Packet::SubAck { header, sub_ack } => {
                 let return_code = sub_ack.get_return_code();
                 info!("SubAck {:?}", return_code);
@@ -219,7 +255,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                     ReturnCode::RejectedNotSupported => todo!(),
                 }
             }
-            Packet::PingReq { header, client_id } => info!("PingReq {:?}", client_id),
+            Packet::PingReq { header, client_id } => info!("TODO: PingReq {:?}", client_id),
             _ => panic!("Unexpected message type received"),
         }
         Ok(())
@@ -285,13 +321,8 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         self.check_state(State::Disconnected)?;
         let mut buf: [u8; MAX_PAYLOAD_SIZE + 32] = [0; MAX_PAYLOAD_SIZE + 32];
 
-        let packet = Packet::connect(clean_session, will, client_id);
-
-        {
-            info!("connect: send");
-            let packet_slice = packet.write_to_buf(&mut buf);
-            self.send_packet(packet_slice).await?;
-        }
+        self.send_connect(&mut buf, clean_session, will, client_id)
+            .await?;
 
         info!("connect: recv");
         // wait for connack
@@ -320,8 +351,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
     }
 
     pub async fn subscribe(&mut self, topic: Topic, dup: bool, qos: QoS) -> Result<(), Error> {
-        info!("send subscribe");
-        info!("{:?}", self.state);
+        info!("send subscribe. state: {:?}", self.state);
         self.check_state(State::Active)?;
 
         let mut buf: [u8; MAX_PAYLOAD_SIZE + 32] = [0; MAX_PAYLOAD_SIZE + 32];
@@ -357,6 +387,43 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
             Ok(_) => Ok(()),
             Err(_) => Err(Error::TransmissionFailed),
         }
+    }
+
+    async fn send_connect(
+        &mut self,
+        buf: &mut [u8],
+        clean_session: bool,
+        will: bool,
+        client_id: &[u8],
+    ) -> Result<(), Error> {
+        let packet = Packet::connect(clean_session, will, client_id);
+        info!("connect: send");
+        let packet_slice = packet.write_to_buf(buf);
+        self.send_packet(packet_slice).await
+    }
+
+    async fn handle_publish(&mut self, publish: &Publish, data: &[u8]) -> Result<(), Error> {
+        info!("publish topic={}", publish.get_topic_id());
+        let topic_id = publish.get_topic_id();
+
+        for entry in self.topic_map.iter().filter(|(key, _)| **key == topic_id) {
+            let (topic, channel_bitmap) = entry;
+            let channel_bitmap = *channel_bitmap;
+            while channel_bitmap.leading_zeros() < 16 {
+                let channel_id = channel_bitmap.trailing_zeros() as usize;
+                let channel = self.consumers[channel_id].as_ref().unwrap();
+                let _ = channel
+                    .send(Message::Publish {
+                        topic: *topic,
+                        payload: data,
+                    })
+                    .await;
+                let bit = 1 << channel_id;
+                let channel_bitmap = channel_bitmap & !bit;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -394,6 +461,8 @@ pub async fn client() {
         remote,
         action_rx,
         state: State::Disconnected,
+        topic_map: TopicMap::new(),
+        consumers: ConsumerList::default(),
     };
 
     connection.run().await;
