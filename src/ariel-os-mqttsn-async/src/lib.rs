@@ -22,11 +22,9 @@ use heapless::{LinearMap, String};
 use serialization::{
     flags::{Flags, QoS, TopicIdType},
     header::{Header, HeaderLong, HeaderShort, MsgType},
-    message_variable_part::{ConnAck, ReturnCode},
+    message_variable_part::{ConnAck, Publish, ReturnCode},
     packet::Packet,
 };
-
-use crate::serialization::message_variable_part::Publish;
 
 pub const MAX_PAYLOAD_SIZE: usize = 1024; // !usize_from_env_or()
 pub const MAX_TOPIC_LENGTH: usize = 64; // !usize_from_env_or()
@@ -43,6 +41,10 @@ pub type MessageChannel = Channel<CriticalSectionRawMutex, Message, 1>;
 pub type MessageReceiver = Receiver<'static, CriticalSectionRawMutex, Message, 1>;
 pub type MessageSender = Sender<'static, CriticalSectionRawMutex, Message, 1>;
 
+type TopicMap = LinearMap<u16, u16, MAX_SUBSCRIPTIONS>;
+type SubscriptionList = [Option<MessageSender>; MAX_SUBSCRIPTIONS];
+type MsgIdMap = LinearMap<u16, Option<MessageSender>, MAX_SUBSCRIPTIONS>;
+
 pub static ACTION_REQUEST_CHANNEL: ActionRequestChannel<'_> = Channel::new();
 
 #[derive(Clone)]
@@ -58,8 +60,14 @@ pub struct ActionRequest<'ch> {
 
 #[derive(Clone)]
 pub enum Action {
-    Subscribe(Topic, MessageSender),
-    Publish { topic: Topic, payload: Payload },
+    Subscribe {
+        topic: Topic,
+        action_tx: MessageSender,
+    },
+    Publish {
+        topic: Topic,
+        payload: Payload,
+    },
 }
 
 #[derive(PartialEq, Default, Debug, defmt::Format)]
@@ -135,8 +143,11 @@ impl MqttClient {
     pub async fn subscribe(&'static self, topic: Topic) -> Result<(), Error> {
         ACTION_REQUEST_CHANNEL
             .send(ActionRequest {
-                action: Action::Subscribe(topic, self.message_channel.sender()),
-                reply_tx: self.action_reply_channel.sender(),
+                action: Action::Subscribe {
+                    topic,
+                    action_tx: self.message_channel.sender(),
+                },
+                reply_tx: self.action_reply_channel.sender(), // obsolete? Can be represented by message_channel
             })
             .await;
         self.action_reply_channel.receive().await
@@ -171,11 +182,9 @@ pub struct MqttsnConnection<'a, 'ch> {
     action_rx: Receiver<'a, CriticalSectionRawMutex, ActionRequest<'ch>, 1>,
     msg_id: u16,
     topic_map: TopicMap,
-    consumers: ConsumerList,
+    consumers: SubscriptionList,
+    msg_id_map: MsgIdMap
 }
-
-type TopicMap = LinearMap<u16, u16, MAX_SUBSCRIPTIONS>;
-type ConsumerList = [Option<MessageSender>; MAX_SUBSCRIPTIONS];
 
 trait RegisterSubscriber {
     fn register_subscriber(&mut self, topic: u16, index: u16) -> Result<(), Error>;
@@ -203,25 +212,20 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         let ActionRequest { action, reply_tx } = action_request;
         let reply = self.handle_action(action).await;
 
-        reply_tx.send(reply).await;
+        reply_tx.send(reply).await; // ?? move to SubAck receive
 
         Ok(())
     }
 
     async fn handle_action(&mut self, action: Action) -> Result<(), Error> {
         match action {
-            Action::Subscribe(topic, channel) => {
+            Action::Subscribe{topic, action_tx: channel} => {
                 info!("subscribe");
 
-                if let Some((i, entry)) = self
-                    .consumer
-                    .iter_mut()
-                    .enumerate()
-                    .find(|(i, c)| c.is_none())
-                {
-                    *entry.1 = Some(channel);
-                    self.topic_map.register_subscriber(topic, i);
+                // identify by message ID, save globally
+                if self.msg_id_map.capacity() > self.msg_id_map.len() {
                     self.subscribe(topic, false, QoS::Zero).await?;
+                    self.msg_id_map.insert(self.msg_id, Some(channel));
                 } else {
                     info!("no free consumer slot");
                 }
@@ -241,14 +245,31 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 header,
                 publish,
                 data,
-            } => self.handle_publish(publish, data).await?,
+            } => self.handle_publish(&publish, data).await?,
             Packet::SubAck { header, sub_ack } => {
                 let return_code = sub_ack.get_return_code();
                 info!("SubAck {:?}", return_code);
                 match return_code {
                     ReturnCode::Accepted => {
-                        let topic = Topic::from_id(sub_ack.get_topic_id());
-                        info!("received Topic Id {:?}", topic);
+                        let topic_id = sub_ack.get_topic_id();
+                        info!("received Topic Id {:?}", topic_id);
+
+                        if let Some(Some(channel)) = self.msg_id_map.remove(&sub_ack.get_msg_id()){
+                            if let Some((i, entry)) = self
+                                .consumers
+                                .iter_mut()
+                                .enumerate()
+                                .find(|(_i, c)| c.is_none())
+                            {
+                                *entry = Some(channel);
+                                self.topic_map.register_subscriber(topic_id, i as u16);
+                            } else {
+                                info!("no free consumer slot");
+                            }
+                        } else {
+                            info!("No return channel for received msg_id. Ignore SubAck");
+                        };
+                        
                     }
                     ReturnCode::RejectedCongestion => todo!(),
                     ReturnCode::RejectedInvalidTopicId => todo!(),
@@ -402,12 +423,11 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         self.send_packet(packet_slice).await
     }
 
-    async fn handle_publish(&mut self, publish: &Publish, data: &[u8]) -> Result<(), Error> {
-        info!("publish topic={}", publish.get_topic_id());
+    async fn handle_publish(&mut self, publish: &Publish, data: Payload) -> Result<(), Error> {
         let topic_id = publish.get_topic_id();
+        info!("publish topic={}", topic_id);
 
-        for entry in self.topic_map.iter().filter(|(key, _)| **key == topic_id) {
-            let (topic, channel_bitmap) = entry;
+        for (topic, channel_bitmap) in self.topic_map.iter().filter(|(key, _)| **key == topic_id) {
             let channel_bitmap = *channel_bitmap;
             while channel_bitmap.leading_zeros() < 16 {
                 let channel_id = channel_bitmap.trailing_zeros() as usize;
@@ -462,7 +482,8 @@ pub async fn client() {
         action_rx,
         state: State::Disconnected,
         topic_map: TopicMap::new(),
-        consumers: ConsumerList::default(),
+        consumers: SubscriptionList::default(),
+        msg_id_map: MsgIdMap::new()
     };
 
     connection.run().await;
