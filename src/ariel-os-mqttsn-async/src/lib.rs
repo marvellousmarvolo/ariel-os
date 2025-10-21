@@ -33,7 +33,11 @@ pub const MAX_CLIENTS: usize = 4;
 
 type Payload = heapless::Vec<u8, MAX_PAYLOAD_SIZE>;
 type ActionReply = Result<ActionResult, Error>;
-type ActionResult = ();
+
+pub enum ActionResult {
+    Ok,
+    Subscription { msgid: u16 },
+}
 
 pub type ActionRequestChannel<'ch> = Channel<CriticalSectionRawMutex, ActionRequest<'ch>, 1>;
 pub type ActionReplyChannel = Channel<CriticalSectionRawMutex, ActionReply, 1>;
@@ -42,6 +46,7 @@ pub type MessageChannel = Channel<CriticalSectionRawMutex, Message, 1>;
 pub type MessageReceiver = Receiver<'static, CriticalSectionRawMutex, Message, 1>;
 pub type MessageSender = Sender<'static, CriticalSectionRawMutex, Message, 1>;
 
+type MsgIdSubscriptionMap = LinearMap<u16, u16, MAX_SUBSCRIPTIONS>;
 type TopicMap = LinearMap<u16, u16, MAX_SUBSCRIPTIONS>;
 type SubscriptionList = [Option<MessageSender>; MAX_SUBSCRIPTIONS];
 type MsgIdMap = LinearMap<u16, Option<MessageSender>, MAX_SUBSCRIPTIONS>;
@@ -51,6 +56,7 @@ pub static ACTION_REQUEST_CHANNEL: ActionRequestChannel<'_> = Channel::new();
 #[derive(Clone)]
 pub enum Message {
     Publish { topic: u16, payload: Payload },
+    TopicIs { msgid: u16, topic_id: u16 },
 }
 
 #[derive(Clone)]
@@ -142,7 +148,7 @@ impl MqttClient {
         }
     }
 
-    pub async fn subscribe(&'static self, topic: Topic) -> Result<(), Error> {
+    pub async fn subscribe(&'static self, topic: Topic) -> Result<u16, Error> {
         ACTION_REQUEST_CHANNEL
             .send(ActionRequest {
                 action: Action::Subscribe {
@@ -153,7 +159,26 @@ impl MqttClient {
             })
             .await;
 
-        self.action_reply_channel.receive().await
+        if let ActionResult::Subscription { msgid } = self.action_reply_channel.receive().await? {
+            info!("got subscribe result msgid: {}", msgid);
+            loop {
+                match self.receive().await {
+                    Message::Publish { topic, payload: _ } => {
+                        info!("dropped message for topic_id {}", topic)
+                    }
+                    Message::TopicIs { msgid, topic_id } => {
+                        info!("got msg_id {} -> topic_id {}", msgid, topic_id);
+                        return Ok(topic_id);
+                    }
+                }
+            }
+        } else {
+            unreachable!()
+        }
+    }
+
+    pub async fn receive(&'static self) -> Message {
+        self.message_channel.receive().await
     }
 }
 
@@ -222,7 +247,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         Ok(())
     }
 
-    async fn handle_action(&mut self, action: Action) -> Result<(), Error> {
+    async fn handle_action(&mut self, action: Action) -> Result<ActionResult, Error> {
         match action {
             Action::Subscribe {
                 topic,
@@ -234,10 +259,10 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
 
                 // identify by message ID, save globally
                 if self.msg_id_map.capacity() > self.msg_id_map.len() {
-                    let msg_id = self.subscribe(topic, false, QoS::Zero).await?;
+                    let msgid = self.subscribe(topic, false, QoS::Zero).await?;
                     // always succeeds, space checked above. can ignore error.
-                    let _ = self.msg_id_map.insert(msg_id, Some(channel));
-                    Ok(())
+                    let _ = self.msg_id_map.insert(msgid, Some(channel));
+                    Ok(ActionResult::Subscription { msgid })
                 } else {
                     Err(Error::NoFreeSubscriberSlot)
                 }
@@ -245,7 +270,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
             Action::Publish { topic, payload } => {
                 info!("publish");
                 self.publish(topic, &payload).await?;
-                Ok(())
+                Ok(ActionResult::Ok)
             }
         }
     }
@@ -280,6 +305,13 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                                 *entry = Some(channel);
                                 // TODO: handle error
                                 let _ = self.topic_map.register_subscriber(topic_id, i as u16);
+
+                                channel
+                                    .send(Message::TopicIs {
+                                        msgid: sub_ack.get_msg_id(),
+                                        topic_id,
+                                    })
+                                    .await;
                             } else {
                                 info!("no free consumer slot");
                                 // TODO: unsubscribe now or not
@@ -447,7 +479,8 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         info!("publish topic={}", topic_id);
 
         for (topic, channel_bitmap) in self.topic_map.iter().filter(|(key, _)| **key == topic_id) {
-            let channel_bitmap = *channel_bitmap;
+            // TODO: explain channel bitmap
+            let mut channel_bitmap = *channel_bitmap;
             while channel_bitmap.leading_zeros() < 16 {
                 let channel_id = channel_bitmap.trailing_zeros() as usize;
                 let channel = self.consumers[channel_id].as_ref().unwrap();
@@ -458,7 +491,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                     })
                     .await;
                 let bit = 1 << channel_id;
-                let channel_bitmap = channel_bitmap & !bit;
+                channel_bitmap = channel_bitmap & !bit;
             }
         }
 
@@ -477,7 +510,7 @@ pub async fn client() {
     let stack = net::network_stack().await.unwrap();
     stack.wait_config_up().await;
     let local = "0.0.0.0:1234".parse().unwrap();
-    let remote = "192.168.1.236:1884".parse().unwrap();
+    let remote = "192.168.1.129:1884".parse().unwrap();
     //let remote = SocketAddr::new(stack.config_v4().unwrap().gateway.unwrap().into(), 1884);
 
     let mut rx_meta = [PacketMetadata::EMPTY; 16];
