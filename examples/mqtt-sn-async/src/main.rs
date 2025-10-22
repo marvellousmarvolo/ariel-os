@@ -2,18 +2,15 @@
 #![no_std]
 
 mod pins;
-use ariel_os::{
-    debug::log::*,
-    gpio::{Level, Output},
-};
-use ariel_os_mqttsn_async::{Message, MqttClient, Topic};
+use ariel_os::debug::log::*;
+use ariel_os_mqttsn_async::client::{Client, Message, Topic};
 
 #[ariel_os::task(autostart)]
 async fn mqtt_sn_test() {
-    static MY_CLIENT: MqttClient = MqttClient::new();
+    static MY_CLIENT: Client = Client::new();
 
     ariel_os::asynch::spawner()
-        .spawn(ariel_os_mqttsn_async::client())
+        .spawn(ariel_os_mqttsn_async::start())
         .unwrap();
 
     info!("mqtt_sn_test()");
@@ -43,12 +40,12 @@ async fn mqtt_sn_test() {
         }
     }
 
-    info!("mqtt_sn_test() end");
+    // info!("mqtt_sn_test() end");
 }
 
 #[ariel_os::task(autostart)]
 async fn mqtt_sn_test2() {
-    static MY_CLIENT: MqttClient = MqttClient::new();
+    static MY_CLIENT: Client = Client::new();
 
     info!("mqtt_sn_test2()");
 
@@ -77,5 +74,5 @@ async fn mqtt_sn_test2() {
         }
     }
 
-    info!("mqtt_sn_test() end");
+    // info!("mqtt_sn_test() end");
 }
