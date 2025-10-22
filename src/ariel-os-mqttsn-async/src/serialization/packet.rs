@@ -8,7 +8,7 @@ use crate::{
     },
 };
 use ariel_os::debug::log::*;
-use bilge::arbitrary_int::{u24, u40, u48};
+use bilge::arbitrary_int::{u40, u48};
 
 #[derive(PartialEq)]
 pub enum Packet<'a> {
@@ -343,11 +343,7 @@ impl Packet<'_> {
         }
     }
 
-    pub(crate) fn publish<'a>(
-        topic: &'a crate::Topic,
-        qos: QoS,
-        payload: &'a [u8],
-    ) -> Packet<'a> {
+    pub(crate) fn publish<'a>(topic: &'a crate::Topic, qos: QoS, payload: &'a [u8]) -> Packet<'a> {
         let (topic_id_type, topic_value) = match topic {
             Topic::ShortName(name) => (TopicIdType::ShortName, &u16::from_be_bytes(*name)),
             Topic::Id(id) => (TopicIdType::IdPredefined, id),

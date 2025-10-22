@@ -1,185 +1,43 @@
 #![no_std]
+pub mod client;
+pub mod error;
 pub mod serialization;
 pub mod udp_nal;
 
+use crate::client::*;
+use crate::error::Error;
+
+use ariel_os::debug::log::*;
 use ariel_os::net;
 use ariel_os::reexports::embassy_time::WithTimeout; // TODO: when rebased, change to ariel_os::time::with_timeout
 use ariel_os::time::Duration;
-use ariel_os::{debug::log::*, reexports::embassy_time::TimeoutError};
 use core::{default::Default, net::SocketAddr};
-use embassy_executor::Spawner;
 use embassy_futures::select::{Either3, select3};
 use embassy_net::udp::{PacketMetadata, UdpSocket};
-use embassy_sync::{
-    blocking_mutex::raw::CriticalSectionRawMutex,
-    channel::{Channel, Receiver, Sender},
-    mutex::Mutex,
-    once_lock::OnceLock,
-    pubsub::PubSubChannel,
-};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver};
 use embedded_nal_async::UnconnectedUdp;
-use heapless::{LinearMap, String, Vec};
+use heapless::{LinearMap, Vec};
 use serialization::{
-    flags::{Flags, QoS, TopicIdType},
-    header::{Header, HeaderLong, HeaderShort, MsgType},
-    message_variable_part::{ConnAck, Publish, ReturnCode},
+    flags::QoS,
+    message_variable_part::{Publish, ReturnCode},
     packet::Packet,
 };
 
-pub const MAX_PAYLOAD_SIZE: usize = 1024; // !usize_from_env_or()
-pub const MAX_TOPIC_LENGTH: usize = 64; // !usize_from_env_or()
 pub const MAX_SUBSCRIPTIONS: usize = 16;
 pub const MAX_CLIENTS: usize = 4;
 
-type Payload = heapless::Vec<u8, MAX_PAYLOAD_SIZE>;
-type ActionReply = Result<ActionResult, Error>;
+// pub type MessageReceiver = Receiver<'static, CriticalSectionRawMutex, Message, 1>;
 
-pub enum ActionResult {
-    Ok,
-    Subscription { msgid: u16 },
-}
-
-pub type ActionRequestChannel<'ch> = Channel<CriticalSectionRawMutex, ActionRequest<'ch>, 1>;
-pub type ActionReplyChannel = Channel<CriticalSectionRawMutex, ActionReply, 1>;
-pub type ActionReplySender<'a> = Sender<'a, CriticalSectionRawMutex, ActionReply, 1>;
-pub type MessageChannel = Channel<CriticalSectionRawMutex, Message, 1>;
-pub type MessageReceiver = Receiver<'static, CriticalSectionRawMutex, Message, 1>;
-pub type MessageSender = Sender<'static, CriticalSectionRawMutex, Message, 1>;
-
-type MsgIdSubscriptionMap = LinearMap<u16, u16, MAX_SUBSCRIPTIONS>;
+// type MsgIdSubscriptionMap = LinearMap<u16, u16, MAX_SUBSCRIPTIONS>;
 type TopicMap = LinearMap<u16, u16, MAX_SUBSCRIPTIONS>;
 type SubscriptionList = [Option<MessageSender>; MAX_SUBSCRIPTIONS];
 type MsgIdMap = LinearMap<u16, Option<MessageSender>, MAX_SUBSCRIPTIONS>;
-
-pub static ACTION_REQUEST_CHANNEL: ActionRequestChannel<'_> = Channel::new();
-
-#[derive(Clone)]
-pub enum Message {
-    Publish { topic: u16, payload: Payload },
-    TopicIs { msgid: u16, topic_id: u16 },
-}
-
-#[derive(Clone)]
-pub struct ActionRequest<'ch> {
-    pub action: Action,
-    pub reply_tx: ActionReplySender<'ch>,
-}
-
-#[derive(Clone)]
-pub enum Action {
-    Subscribe {
-        topic: Topic,
-        message_tx: MessageSender,
-    },
-    Publish {
-        topic: Topic,
-        payload: Payload,
-    },
-}
 
 #[derive(PartialEq, Default, Debug, defmt::Format)]
 enum State {
     #[default]
     Disconnected,
     Active,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, defmt::Format)]
-pub enum Error {
-    InvalidState,
-    Timeout,
-    TransmissionFailed,
-    ConversionFailed,
-    Rejected,
-    InvalidIdType,
-    NoFreeSubscriberSlot,
-}
-
-#[derive(Debug, defmt::Format, Clone, PartialEq)]
-pub enum Topic {
-    Id(u16),
-    ShortName([u8; 2]),
-    LongName(String<MAX_TOPIC_LENGTH>),
-}
-
-impl Topic {
-    pub fn from_short(short_name: [u8; 2]) -> Topic {
-        Self::ShortName(short_name)
-    }
-
-    pub fn from_id(id: u16) -> Topic {
-        Self::Id(id)
-    }
-
-    pub fn from_long(long_name: &str) -> Topic {
-        // TODO: make fallible
-        Self::LongName(String::try_from(long_name).unwrap())
-    }
-
-    pub fn len(&self) -> usize {
-        match self {
-            Self::Id(_id) => 2,
-            Self::ShortName(_short_name) => 2,
-            Self::LongName(long_name) => long_name.len(),
-        }
-    }
-
-    fn to_buf(&self, buf: &mut [u8]) {
-        match self {
-            Self::Id(id) => buf[..2].copy_from_slice(&id.to_be_bytes()),
-            Self::ShortName(short_name) => buf[..2].copy_from_slice(short_name),
-            Self::LongName(long_name) => {
-                (&mut buf[..long_name.len()]).copy_from_slice(long_name.as_bytes())
-            }
-        }
-    }
-}
-
-pub struct MqttClient {
-    action_reply_channel: ActionReplyChannel,
-    message_channel: MessageChannel,
-}
-
-impl MqttClient {
-    pub const fn new() -> Self {
-        Self {
-            action_reply_channel: ActionReplyChannel::new(),
-            message_channel: MessageChannel::new(),
-        }
-    }
-
-    pub async fn subscribe(&'static self, topic: Topic) -> Result<u16, Error> {
-        ACTION_REQUEST_CHANNEL
-            .send(ActionRequest {
-                action: Action::Subscribe {
-                    topic,
-                    message_tx: self.message_channel.sender(),
-                },
-                reply_tx: self.action_reply_channel.sender(), // obsolete? Can be represented by message_channel
-            })
-            .await;
-
-        if let ActionResult::Subscription { msgid } = self.action_reply_channel.receive().await? {
-            info!("got subscribe result msgid: {}", msgid);
-            loop {
-                match self.receive().await {
-                    Message::Publish { topic, payload: _ } => {
-                        info!("dropped message for topic_id {}", topic)
-                    }
-                    Message::TopicIs { msgid, topic_id } => {
-                        info!("got msg_id {} -> topic_id {}", msgid, topic_id);
-                        return Ok(topic_id);
-                    }
-                }
-            }
-        } else {
-            unreachable!()
-        }
-    }
-
-    pub async fn receive(&'static self) -> Message {
-        self.message_channel.receive().await
-    }
 }
 
 trait MqttPacketReceive {
@@ -201,19 +59,6 @@ impl MqttPacketReceive for udp_nal::UnconnectedUdp<'_> {
     }
 }
 
-pub struct MqttsnConnection<'a, 'ch> {
-    stack: net::NetworkStack,
-    state: State,
-    local: SocketAddr,
-    remote: SocketAddr,
-    socket: udp_nal::UnconnectedUdp<'a>,
-    action_rx: Receiver<'a, CriticalSectionRawMutex, ActionRequest<'ch>, 1>,
-    msg_id: u16,
-    topic_map: TopicMap,
-    consumers: SubscriptionList,
-    msg_id_map: MsgIdMap,
-}
-
 trait RegisterSubscriber {
     fn register_subscriber(&mut self, topic: u16, index: u16) -> Result<(), Error>;
 }
@@ -232,6 +77,19 @@ impl RegisterSubscriber for TopicMap {
             }
         }
     }
+}
+
+pub struct MqttsnConnection<'a, 'ch> {
+    stack: net::NetworkStack,
+    state: State,
+    local: SocketAddr,
+    remote: SocketAddr,
+    socket: udp_nal::UnconnectedUdp<'a>,
+    action_rx: Receiver<'a, CriticalSectionRawMutex, ActionRequest<'ch>, 1>,
+    msg_id: u16,
+    topic_map: TopicMap,
+    consumers: SubscriptionList,
+    msg_id_map: MsgIdMap,
 }
 
 impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
@@ -277,9 +135,11 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
 
     async fn handle_packet(&mut self, packet: Packet<'_>) -> Result<(), Error> {
         match packet {
-            Packet::RegAck { header, reg_ack } => info!("RegAck {:?}", reg_ack.get_return_code()),
+            Packet::RegAck { header: _, reg_ack } => {
+                info!("RegAck {:?}", reg_ack.get_return_code())
+            }
             Packet::Publish {
-                header,
+                header: _,
                 publish,
                 data,
             } => {
@@ -287,7 +147,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 self.handle_publish(&publish, Vec::from_slice(data).unwrap())
                     .await?
             }
-            Packet::SubAck { header, sub_ack } => {
+            Packet::SubAck { header: _, sub_ack } => {
                 let return_code = sub_ack.get_return_code();
                 info!("SubAck {:?}", return_code);
                 match return_code {
@@ -326,7 +186,10 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                     ReturnCode::RejectedNotSupported => todo!(),
                 }
             }
-            Packet::PingReq { header, client_id } => info!("TODO: PingReq {:?}", client_id),
+            Packet::PingReq {
+                header: _,
+                client_id,
+            } => info!("TODO: PingReq {:?}", client_id),
             _ => panic!("Unexpected message type received"),
         }
         Ok(())
@@ -348,6 +211,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
             // TODO: "32" is arbitrary, check MAX_PAYLOAD_SIZE and add appropriate header length
             let mut rx_buf = [0; MAX_PAYLOAD_SIZE + 32];
             loop {
+                // TODO: Cancel-Safety of select statement
                 match select3(
                     self.socket.receive_packet(&mut rx_buf),
                     self.action_rx.receive(),
@@ -404,7 +268,10 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
             .await
             .map_err(|_| Error::Timeout)??
         {
-            Packet::ConnAck { header, conn_ack } => match conn_ack.get_return_code() {
+            Packet::ConnAck {
+                header: _,
+                conn_ack,
+            } => match conn_ack.get_return_code() {
                 ReturnCode::Accepted => {
                     self.state = State::Active;
                     info!("connected");
@@ -506,7 +373,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
 }
 
 #[embassy_executor::task]
-pub async fn client() {
+pub async fn start() {
     let stack = net::network_stack().await.unwrap();
     stack.wait_config_up().await;
     let local = "0.0.0.0:1234".parse().unwrap();
@@ -526,7 +393,7 @@ pub async fn client() {
         &mut tx_buffer,
     );
 
-    let mut socket = udp_nal::UnconnectedUdp::bind_multiple(socket, local)
+    let socket = udp_nal::UnconnectedUdp::bind_multiple(socket, local)
         .await
         .unwrap();
 
