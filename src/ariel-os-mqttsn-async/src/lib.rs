@@ -4,8 +4,8 @@ pub mod error;
 pub mod serialization;
 pub mod udp_nal;
 
-use crate::client::*;
 use crate::error::Error;
+use crate::{client::*, serialization::message_variable_part::SubAck};
 
 use ariel_os::debug::log::*;
 use ariel_os::net;
@@ -79,6 +79,48 @@ impl RegisterSubscriber for TopicMap {
     }
 }
 
+#[embassy_executor::task]
+pub async fn start() {
+    let stack = net::network_stack().await.unwrap();
+    stack.wait_config_up().await;
+    let local = "0.0.0.0:1234".parse().unwrap();
+    let remote = "192.168.1.129:1884".parse().unwrap();// !usize_from_env_or()
+    //let remote = SocketAddr::new(stack.config_v4().unwrap().gateway.unwrap().into(), 1884);
+
+    let mut rx_meta = [PacketMetadata::EMPTY; 16];
+    let mut rx_buffer = [0; 4096];
+    let mut tx_meta = [PacketMetadata::EMPTY; 16];
+    let mut tx_buffer = [0; 4096];
+
+    let socket = UdpSocket::new(
+        stack,
+        &mut rx_meta,
+        &mut rx_buffer,
+        &mut tx_meta,
+        &mut tx_buffer,
+    );
+
+    let socket = udp_nal::UnconnectedUdp::bind_multiple(socket, local)
+        .await
+        .unwrap();
+
+    let action_rx = ACTION_REQUEST_CHANNEL.receiver();
+    let mut connection = MqttsnConnection {
+        msg_id: 0,
+        stack,
+        socket,
+        local,
+        remote,
+        action_rx,
+        state: State::Disconnected,
+        topic_map: TopicMap::new(),
+        consumers: SubscriptionList::default(),
+        msg_id_map: MsgIdMap::new(),
+    };
+
+    connection.run().await;
+}
+
 pub struct MqttsnConnection<'a, 'ch> {
     stack: net::NetworkStack,
     state: State,
@@ -93,108 +135,6 @@ pub struct MqttsnConnection<'a, 'ch> {
 }
 
 impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
-    async fn handle_action_request(
-        &mut self,
-        action_request: ActionRequest<'_>,
-    ) -> Result<(), Error> {
-        let ActionRequest { action, reply_tx } = action_request;
-        let reply = self.handle_action(action).await;
-
-        reply_tx.send(reply).await; // ?? move to SubAck receive
-
-        Ok(())
-    }
-
-    async fn handle_action(&mut self, action: Action) -> Result<ActionResult, Error> {
-        match action {
-            Action::Subscribe {
-                topic,
-                message_tx: channel,
-            } => {
-                info!("subscribe");
-
-                // TODO: check here if there is actually a free subscriber slot?
-
-                // identify by message ID, save globally
-                if self.msg_id_map.capacity() > self.msg_id_map.len() {
-                    let msgid = self.subscribe(topic, false, QoS::Zero).await?;
-                    // always succeeds, space checked above. can ignore error.
-                    let _ = self.msg_id_map.insert(msgid, Some(channel));
-                    Ok(ActionResult::Subscription { msgid })
-                } else {
-                    Err(Error::NoFreeSubscriberSlot)
-                }
-            }
-            Action::Publish { topic, payload } => {
-                info!("publish");
-                self.publish(topic, &payload).await?;
-                Ok(ActionResult::Ok)
-            }
-        }
-    }
-
-    async fn handle_packet(&mut self, packet: Packet<'_>) -> Result<(), Error> {
-        match packet {
-            Packet::RegAck { header: _, reg_ack } => {
-                info!("RegAck {:?}", reg_ack.get_return_code())
-            }
-            Packet::Publish {
-                header: _,
-                publish,
-                data,
-            } => {
-                // unwrap ok, data len checked earlier
-                self.handle_publish(&publish, Vec::from_slice(data).unwrap())
-                    .await?
-            }
-            Packet::SubAck { header: _, sub_ack } => {
-                let return_code = sub_ack.get_return_code();
-                info!("SubAck {:?}", return_code);
-                match return_code {
-                    ReturnCode::Accepted => {
-                        let topic_id = sub_ack.get_topic_id();
-                        info!("received Topic Id {:?}", topic_id);
-
-                        if let Some(Some(channel)) = self.msg_id_map.remove(&sub_ack.get_msg_id()) {
-                            if let Some((i, entry)) = self
-                                .consumers
-                                .iter_mut()
-                                .enumerate()
-                                .find(|(_i, c)| c.is_none())
-                            {
-                                *entry = Some(channel);
-                                // TODO: handle error
-                                let _ = self.topic_map.register_subscriber(topic_id, i as u16);
-
-                                channel
-                                    .send(Message::TopicIs {
-                                        msgid: sub_ack.get_msg_id(),
-                                        topic_id,
-                                    })
-                                    .await;
-                            } else {
-                                info!("no free consumer slot");
-                                // TODO: unsubscribe now or not
-                            }
-                        } else {
-                            // TODO: unsubscribe now or not
-                            info!("No return channel for received msg_id. Ignore SubAck");
-                        };
-                    }
-                    ReturnCode::RejectedCongestion => todo!(),
-                    ReturnCode::RejectedInvalidTopicId => todo!(),
-                    ReturnCode::RejectedNotSupported => todo!(),
-                }
-            }
-            Packet::PingReq {
-                header: _,
-                client_id,
-            } => info!("TODO: PingReq {:?}", client_id),
-            _ => panic!("Unexpected message type received"),
-        }
-        Ok(())
-    }
-
     async fn run(&mut self) {
         // TODO: handle errors
         loop {
@@ -236,6 +176,135 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 }
             }
         }
+    }
+
+    async fn handle_action_request(
+        &mut self,
+        action_request: ActionRequest<'_>,
+    ) -> Result<(), Error> {
+        let ActionRequest {
+            action,
+            response_tx,
+        } = action_request;
+        let action_response = self.handle_action(action).await;
+
+        response_tx.send(action_response).await;
+
+        Ok(())
+    }
+
+    async fn handle_action(&mut self, action: Action) -> Result<ActionResponse, Error> {
+        match action {
+            Action::Subscribe { topic, message_tx } => {
+                info!("subscribe");
+
+                // TODO: check here if there is actually a free subscriber slot?
+
+                // identify by message ID, pre-reserve id_map slot
+                if self.msg_id_map.capacity() > self.msg_id_map.len() {
+                    let msgid = self.subscribe(topic, false, QoS::Zero).await?;
+                    // always succeeds, space checked above. can ignore error.
+                    let _ = self.msg_id_map.insert(msgid, Some(message_tx));
+                    Ok(ActionResponse::Subscription { msgid })
+                } else {
+                    Err(Error::NoFreeSubscriberSlot)
+                }
+            }
+            Action::Publish { topic, payload } => {
+                info!("publish");
+                self.publish(topic, &payload).await?;
+                Ok(ActionResponse::Ok)
+            }
+        }
+    }
+
+    async fn handle_packet(&mut self, packet: Packet<'_>) -> Result<(), Error> {
+        match packet {
+            Packet::RegAck { header: _, reg_ack } => {
+                info!("RegAck {:?}", reg_ack.get_return_code())
+            }
+            Packet::Publish {
+                header: _,
+                publish,
+                data,
+            } => {
+                // unwrap ok, data len checked earlier
+                self.handle_publish(&publish, Vec::from_slice(data).unwrap())
+                    .await?
+            }
+            Packet::SubAck { header: _, sub_ack } => self.handle_sub_ack(sub_ack).await?,
+            Packet::PingReq {
+                header: _,
+                client_id,
+            } => info!("TODO: PingReq {:?}", client_id),
+            _ => panic!("Unexpected message type received"),
+        }
+        Ok(())
+    }
+
+    async fn handle_sub_ack(&mut self, sub_ack: SubAck) -> Result<(), Error> {
+        let return_code = sub_ack.get_return_code();
+        info!("SubAck {:?}", return_code);
+        match return_code {
+            ReturnCode::Accepted => {
+                let topic_id = sub_ack.get_topic_id();
+                info!("received Topic Id {:?}", topic_id);
+
+                if let Some(Some(message_tx)) = self.msg_id_map.remove(&sub_ack.get_msg_id()) {
+                    if let Some((i, consumer_entry)) = self
+                        .consumers
+                        .iter_mut()
+                        .enumerate()
+                        .find(|(_i, c)| c.is_none())
+                    {
+                        *consumer_entry = Some(message_tx);
+                        // TODO: handle error
+                        let _ = self.topic_map.register_subscriber(topic_id, i as u16);
+
+                        message_tx
+                            .send(Message::TopicInfo {
+                                msgid: sub_ack.get_msg_id(),
+                                topic_id,
+                            })
+                            .await;
+                    } else {
+                        info!("no free consumer slot");
+                        // TODO: unsubscribe now or not
+                    }
+                } else {
+                    // TODO: unsubscribe now or not
+                    info!("No return channel for received msg_id. Ignore SubAck");
+                };
+            }
+            ReturnCode::RejectedCongestion => todo!(),
+            ReturnCode::RejectedInvalidTopicId => todo!(),
+            ReturnCode::RejectedNotSupported => todo!(),
+        }
+        Ok(())
+    }
+
+    async fn handle_publish(&mut self, publish: &Publish, data: Payload) -> Result<(), Error> {
+        let topic_id = publish.get_topic_id();
+        info!("publish topic={}", topic_id);
+
+        for (topic, channel_bitmap) in self.topic_map.iter().filter(|(key, _)| **key == topic_id) {
+            // TODO: explain channel bitmap
+            let mut channel_bitmap = *channel_bitmap;
+            while channel_bitmap.leading_zeros() < 16 {
+                let channel_id = channel_bitmap.trailing_zeros() as usize;
+                let channel = self.consumers[channel_id].as_ref().unwrap();
+                let _ = channel
+                    .send(Message::Publish {
+                        topic: *topic,
+                        payload: data.clone(),
+                    })
+                    .await;
+                let bit = 1 << channel_id;
+                channel_bitmap = channel_bitmap & !bit;
+            }
+        }
+
+        Ok(())
     }
 
     fn check_state(&self, state: State) -> Result<(), Error> {
@@ -341,77 +410,11 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         self.send_packet(packet_slice).await
     }
 
-    async fn handle_publish(&mut self, publish: &Publish, data: Payload) -> Result<(), Error> {
-        let topic_id = publish.get_topic_id();
-        info!("publish topic={}", topic_id);
-
-        for (topic, channel_bitmap) in self.topic_map.iter().filter(|(key, _)| **key == topic_id) {
-            // TODO: explain channel bitmap
-            let mut channel_bitmap = *channel_bitmap;
-            while channel_bitmap.leading_zeros() < 16 {
-                let channel_id = channel_bitmap.trailing_zeros() as usize;
-                let channel = self.consumers[channel_id].as_ref().unwrap();
-                let _ = channel
-                    .send(Message::Publish {
-                        topic: *topic,
-                        payload: data.clone(),
-                    })
-                    .await;
-                let bit = 1 << channel_id;
-                channel_bitmap = channel_bitmap & !bit;
-            }
-        }
-
-        Ok(())
-    }
-
     fn get_next_msg_id(&mut self) -> u16 {
         let msg_id = self.msg_id;
         self.msg_id += 1;
         msg_id
     }
-}
-
-#[embassy_executor::task]
-pub async fn start() {
-    let stack = net::network_stack().await.unwrap();
-    stack.wait_config_up().await;
-    let local = "0.0.0.0:1234".parse().unwrap();
-    let remote = "192.168.1.129:1884".parse().unwrap();
-    //let remote = SocketAddr::new(stack.config_v4().unwrap().gateway.unwrap().into(), 1884);
-
-    let mut rx_meta = [PacketMetadata::EMPTY; 16];
-    let mut rx_buffer = [0; 4096];
-    let mut tx_meta = [PacketMetadata::EMPTY; 16];
-    let mut tx_buffer = [0; 4096];
-
-    let socket = UdpSocket::new(
-        stack,
-        &mut rx_meta,
-        &mut rx_buffer,
-        &mut tx_meta,
-        &mut tx_buffer,
-    );
-
-    let socket = udp_nal::UnconnectedUdp::bind_multiple(socket, local)
-        .await
-        .unwrap();
-
-    let action_rx = ACTION_REQUEST_CHANNEL.receiver();
-    let mut connection = MqttsnConnection {
-        msg_id: 0,
-        stack,
-        socket,
-        local,
-        remote,
-        action_rx,
-        state: State::Disconnected,
-        topic_map: TopicMap::new(),
-        consumers: SubscriptionList::default(),
-        msg_id_map: MsgIdMap::new(),
-    };
-
-    connection.run().await;
 }
 
 // async fn ping() -> Result<(), Error> {

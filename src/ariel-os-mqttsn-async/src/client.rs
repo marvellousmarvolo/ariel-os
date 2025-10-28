@@ -11,7 +11,7 @@ pub const MAX_TOPIC_LENGTH: usize = 64; // !usize_from_env_or()
 
 pub static ACTION_REQUEST_CHANNEL: ActionRequestChannel<'_> = Channel::new();
 
-type ActionReply = Result<ActionResult, Error>;
+type ActionReply = Result<ActionResponse, Error>;
 
 pub type Payload = heapless::Vec<u8, MAX_PAYLOAD_SIZE>;
 pub type ActionRequestChannel<'ch> = Channel<CriticalSectionRawMutex, ActionRequest<'ch>, 1>;
@@ -23,10 +23,10 @@ pub type MessageSender = Sender<'static, CriticalSectionRawMutex, Message, 1>;
 #[derive(Clone)]
 pub struct ActionRequest<'ch> {
     pub action: Action,
-    pub reply_tx: ActionReplySender<'ch>,
+    pub response_tx: ActionReplySender<'ch>,
 }
 
-pub enum ActionResult {
+pub enum ActionResponse {
     Ok,
     Subscription { msgid: u16 },
 }
@@ -46,7 +46,7 @@ pub enum Action {
 #[derive(Clone)]
 pub enum Message {
     Publish { topic: u16, payload: Payload },
-    TopicIs { msgid: u16, topic_id: u16 },
+    TopicInfo { msgid: u16, topic_id: u16 },
 }
 
 #[derive(Debug, defmt::Format, Clone, PartialEq)]
@@ -109,18 +109,18 @@ impl Client {
                     topic,
                     message_tx: self.message_channel.sender(),
                 },
-                reply_tx: self.action_reply_channel.sender(), // obsolete? Can be represented by message_channel
+                response_tx: self.action_reply_channel.sender(), // obsolete? Can be represented by message_channel
             })
             .await;
 
-        if let ActionResult::Subscription { msgid } = self.action_reply_channel.receive().await? {
+        if let ActionResponse::Subscription { msgid } = self.action_reply_channel.receive().await? {
             info!("got subscribe result msgid: {}", msgid);
             loop {
                 match self.receive().await {
                     Message::Publish { topic, payload: _ } => {
                         info!("dropped message for topic_id {}", topic)
                     }
-                    Message::TopicIs { msgid, topic_id } => {
+                    Message::TopicInfo { msgid, topic_id } => {
                         info!("got msg_id {} -> topic_id {}", msgid, topic_id);
                         return Ok(topic_id);
                     }
