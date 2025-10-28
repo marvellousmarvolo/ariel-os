@@ -437,7 +437,9 @@ version = "0.1.0"
 dependencies = [
  "arbitrary-int 1.3.0",
  "ariel-os",
+ "ariel-os-debug",
  "ariel-os-embassy",
+ "ariel-os-utils",
  "bilge 0.2.0",
  "embassy-executor",
  "embassy-futures",
