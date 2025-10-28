@@ -1,4 +1,4 @@
-use ariel_os::debug::log::defmt;
+use ariel_os_debug::log::defmt;
 
 #[derive(Debug, Copy, Clone, PartialEq, defmt::Format)]
 pub enum Error {

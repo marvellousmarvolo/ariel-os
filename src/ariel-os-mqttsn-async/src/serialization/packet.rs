@@ -7,7 +7,7 @@ use crate::{
         packet::Error::{PacketNotRecognized, ParsingFailed},
     },
 };
-use ariel_os::debug::log::*;
+use ariel_os_debug::log::*;
 use bilge::arbitrary_int::{u40, u48};
 
 #[derive(PartialEq)]
@@ -88,14 +88,17 @@ pub enum Error {
 
 impl Packet<'_> {
     pub fn try_from(bytes: &[u8]) -> Result<Packet<'_>, Error> {
+        #[cfg(feature = "defmt")]
         debug!("bytes: {:?}", bytes);
 
         let header = Header::try_from(bytes).unwrap();
 
+        #[cfg(feature = "defmt")]
         debug!("header: {:?}", header);
 
         let msg_type = header.msg_type();
 
+        #[cfg(feature = "defmt")]
         info!("msg_type: {:?}", msg_type);
 
         match msg_type {
@@ -268,6 +271,7 @@ impl Packet<'_> {
             // MsgType::WillMsgEsp => {}
             // MsgType::Encapsulated => {}
             _ => {
+                #[cfg(feature = "defmt")]
                 info!("Packet not recognized");
             }
         }
@@ -334,6 +338,7 @@ impl Packet<'_> {
         let flags = Flags::new(topic.into(), true, false, false, qos, dup);
         let msg_len = calculate_message_length(topic.len(), mvp::Subscribe::SIZE);
 
+        #[cfg(feature = "defmt")]
         trace!("msg_len: {}", &msg_len);
 
         Packet::Subscribe {

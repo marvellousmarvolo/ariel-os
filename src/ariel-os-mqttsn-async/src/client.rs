@@ -1,5 +1,5 @@
 use crate::error::Error;
-use ariel_os::debug::log::*;
+use ariel_os_debug::log::*;
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     channel::{Channel, Sender},
@@ -114,13 +114,16 @@ impl Client {
             .await;
 
         if let ActionResponse::Subscription { msgid } = self.action_reply_channel.receive().await? {
+            #[cfg(feature = "defmt")]
             info!("got subscribe result msgid: {}", msgid);
             loop {
                 match self.receive().await {
                     Message::Publish { topic, payload: _ } => {
+                        #[cfg(feature = "defmt")]
                         info!("dropped message for topic_id {}", topic)
                     }
                     Message::TopicInfo { msgid, topic_id } => {
+                        #[cfg(feature = "defmt")]
                         info!("got msg_id {} -> topic_id {}", msgid, topic_id);
                         return Ok(topic_id);
                     }
