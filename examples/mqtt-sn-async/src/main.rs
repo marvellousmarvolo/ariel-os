@@ -31,7 +31,7 @@ async fn mqtt_sn_test() {
                     info!("got message for topic_id {} (non-utf8)", topic)
                 }
             }
-            Message::TopicIs { msgid, topic_id } => {
+            Message::TopicInfo { msgid, topic_id } => {
                 info!(
                     "CLIENT UNEXPECTED: got msg_id {} -> topic_id {}",
                     msgid, topic_id
@@ -65,7 +65,7 @@ async fn mqtt_sn_test2() {
                     info!("other got message for topic_id {} (non-utf8)", topic)
                 }
             }
-            Message::TopicIs { msgid, topic_id } => {
+            Message::TopicInfo { msgid, topic_id } => {
                 info!(
                     "CLIENT UNEXPECTED: got msg_id {} -> topic_id {}",
                     msgid, topic_id
