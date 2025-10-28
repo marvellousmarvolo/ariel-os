@@ -1,4 +1,4 @@
-use ariel_os::debug::log::*;
+use ariel_os_debug::log::*;
 use bilge::give_me_error;
 use bilge::prelude::*;
 
@@ -97,14 +97,17 @@ impl Header {
         let mut result: [u8; 4] = [0u8; 4];
         match self {
             Header::Long(long) => {
+                #[cfg(feature = "defmt")]
                 debug!("long {:?}", long.value.to_be_bytes());
                 result.copy_from_slice(&long.value.to_be_bytes()[..4])
             }
             Header::Short(short) => {
+                #[cfg(feature = "defmt")]
                 debug!("short {:?}", short.value.to_be_bytes());
                 result[..2].copy_from_slice(&short.value.to_be_bytes()[..2])
             }
         }
+        #[cfg(feature = "defmt")]
         debug!("result {:?}", result);
         result
     }

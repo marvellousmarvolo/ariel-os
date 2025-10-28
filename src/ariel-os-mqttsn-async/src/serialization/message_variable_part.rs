@@ -1,5 +1,5 @@
 use crate::serialization::flags::Flags;
-use ariel_os::debug::log::defmt;
+use ariel_os_debug::log::defmt;
 use bilge::prelude::*;
 
 #[bitsize(8)]

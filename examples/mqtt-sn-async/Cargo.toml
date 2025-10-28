@@ -10,7 +10,7 @@ workspace = true
 [dependencies]
 embassy-futures = { workspace = true }
 ariel-os = { path = "../../src/ariel-os", features = ["udp", "usb"] }
-ariel-os-mqttsn-async = { workspace = true }
+ariel-os-mqttsn-async = { workspace = true, features = ["defmt"]}
 embedded-io-async = "0.6.1"
 embedded-nal-async = "0.8"
 embassy-net = { workspace = true, features = [
