@@ -448,8 +448,6 @@ dependencies = [
  "embedded-io-async",
  "embedded-nal-async",
  "heapless 0.8.0",
- "log",
- "static_cell",
 ]
 
 [[package]]
@@ -486,6 +484,7 @@ dependencies = [
  "embassy-nrf",
  "embassy-sync 0.6.2",
  "embedded-hal-async",
+ "embedded-io-async",
  "nrf-sdc",
  "paste",
  "portable-atomic",
@@ -3386,17 +3385,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "heapless"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1edcd5a338e64688fbdcb7531a846cfd3476a54784dcb918a0844682bc7ada5"
-dependencies = [
- "hash32 0.3.1",
- "serde",
- "stable_deref_trait",
-]
-
-[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4118,20 +4106,8 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 name = "mqtt-sn-async"
 version = "0.0.0"
 dependencies = [
- "arbitrary-int 2.0.0",
  "ariel-os",
- "ariel-os-boards",
- "ariel-os-embassy",
  "ariel-os-mqttsn-async",
- "bilge 0.3.0",
- "embassy-futures",
- "embassy-net",
- "embassy-sync 0.6.2",
- "embedded-io-async",
- "embedded-nal-async",
- "embedded-time",
- "heapless 0.9.1",
- "log",
 ]
 
 [[package]]

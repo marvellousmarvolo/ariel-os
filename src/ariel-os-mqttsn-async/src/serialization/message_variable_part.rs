@@ -113,6 +113,10 @@ impl RegAck {
     pub fn get_return_code(&self) -> ReturnCode {
         self.return_code()
     }
+
+    pub fn get_msg_id(&self) -> u16 {
+        self.msg_id()
+    }
 }
 
 #[bitsize(40)]
