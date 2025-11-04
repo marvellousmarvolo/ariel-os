@@ -27,7 +27,7 @@ pub enum Packet<'a> {
     Register {
         header: Header,
         register: mvp::Register,
-        topic: &'a [u8],
+        topic: &'a Topic,
     },
     RegAck {
         header: Header,
@@ -235,7 +235,8 @@ impl Packet<'_> {
                 register,
                 topic,
             } => {
-                construct_buffer!(buf, header, register, mvp::Register::SIZE, topic);
+                let written = construct_buffer!(buf, header, register, mvp::Register::SIZE);
+                topic.to_buf(&mut buf[written..]);
             }
             // MsgType::RegAck => {}
             Packet::Publish {
@@ -338,12 +339,19 @@ impl Packet<'_> {
         let flags = Flags::new(topic.into(), true, false, false, qos, dup);
         let msg_len = calculate_message_length(topic.len(), mvp::Subscribe::SIZE);
 
-        #[cfg(feature = "defmt")]
-        trace!("msg_len: {}", &msg_len);
-
         Packet::Subscribe {
             header: Header::new(MsgType::Subscribe, msg_len),
             subscribe: mvp::Subscribe::new(msg_id, flags),
+            topic: &topic,
+        }
+    }
+
+    pub(crate) fn register<'a>(topic: &'a crate::Topic, msg_id: u16) -> Packet<'a> {
+        let msg_len = calculate_message_length(topic.len(), mvp::Register::SIZE);
+
+        Packet::Register {
+            header: Header::new(MsgType::Register, msg_len),
+            register: mvp::Register::new(msg_id, 0x0000u16), // topic_id is irrelevant on client
             topic: &topic,
         }
     }

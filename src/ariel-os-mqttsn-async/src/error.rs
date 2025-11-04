@@ -9,4 +9,5 @@ pub enum Error {
     Rejected,
     InvalidIdType,
     NoFreeSubscriberSlot,
+    PayloadTooBig,
 }

@@ -8,24 +8,8 @@ publish = false
 workspace = true
 
 [dependencies]
-embassy-futures = { workspace = true }
 ariel-os = { path = "../../src/ariel-os", features = ["udp", "usb"] }
 ariel-os-mqttsn-async = { workspace = true, features = ["defmt"]}
-embedded-io-async = "0.6.1"
-embedded-nal-async = "0.8"
-embassy-net = { workspace = true, features = [
-    "udp",
-    "proto-ipv4",
-    "proto-ipv6",
-] }
-embassy-sync.workspace = true
-ariel-os-embassy = { workspace = true }
-ariel-os-boards = { path = "../../src/ariel-os-boards" }
-log = "0.4.25"
-heapless = { version = "0.9.1", features = ["serde"] }
-bilge = "0.3.0"
-arbitrary-int = "2.0.0"
-embedded-time = "0.12.1"
 
 #[dev-dependencies]
 #embedded-test = { workspace = true }
