@@ -4,7 +4,7 @@ use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     channel::{Channel, Sender},
 };
-use heapless::String;
+use heapless::{String, Vec};
 
 pub const MAX_PAYLOAD_SIZE: usize = 1024; // !usize_from_env_or()
 pub const MAX_TOPIC_LENGTH: usize = 64; // !usize_from_env_or()
@@ -28,12 +28,17 @@ pub struct ActionRequest<'ch> {
 
 pub enum ActionResponse {
     Ok,
-    Subscription { msgid: u16 },
+    Subscription { msg_id: u16 },
+    Registration { msg_id: u16 },
 }
 
 #[derive(Clone)]
 pub enum Action {
     Subscribe {
+        topic: Topic,
+        message_tx: MessageSender,
+    },
+    Register {
         topic: Topic,
         message_tx: MessageSender,
     },
@@ -90,14 +95,14 @@ impl Topic {
 }
 
 pub struct Client {
-    action_reply_channel: ActionReplyChannel,
+    action_response_channel: ActionReplyChannel,
     message_channel: MessageChannel,
 }
 
 impl Client {
     pub const fn new() -> Self {
         Self {
-            action_reply_channel: ActionReplyChannel::new(),
+            action_response_channel: ActionReplyChannel::new(),
             message_channel: MessageChannel::new(),
         }
     }
@@ -109,29 +114,85 @@ impl Client {
                     topic,
                     message_tx: self.message_channel.sender(),
                 },
-                response_tx: self.action_reply_channel.sender(), // obsolete? Can be represented by message_channel
+                response_tx: self.action_response_channel.sender(),
             })
             .await;
 
-        if let ActionResponse::Subscription { msgid } = self.action_reply_channel.receive().await? {
+        if let ActionResponse::Subscription { msg_id: msgid } =
+            self.action_response_channel.receive().await?
+        {
             #[cfg(feature = "defmt")]
             info!("got subscribe result msgid: {}", msgid);
             loop {
                 match self.receive().await {
-                    Message::Publish { topic, payload: _ } => {
-                        #[cfg(feature = "defmt")]
-                        info!("dropped message for topic_id {}", topic)
-                    }
                     Message::TopicInfo { msgid, topic_id } => {
                         #[cfg(feature = "defmt")]
                         info!("got msg_id {} -> topic_id {}", msgid, topic_id);
                         return Ok(topic_id);
+                    }
+                    Message::Publish { topic, payload: _ } => {
+                        // drop messages during subscription/registration process
+                        #[cfg(feature = "defmt")]
+                        info!("dropped message for topic_id {}", topic)
                     }
                 }
             }
         } else {
             unreachable!()
         }
+    }
+
+    pub async fn register(&'static self, topic: Topic) -> Result<u16, Error> {
+        ACTION_REQUEST_CHANNEL
+            .send(ActionRequest {
+                action: Action::Register {
+                    topic,
+                    message_tx: self.message_channel.sender(),
+                },
+                response_tx: self.action_response_channel.sender(),
+            })
+            .await;
+
+        if let ActionResponse::Registration { msg_id: msgid } =
+            self.action_response_channel.receive().await?
+        {
+            #[cfg(feature = "defmt")]
+            info!("got registration result msgid: {}", msgid);
+            loop {
+                match self.receive().await {
+                    Message::TopicInfo { msgid, topic_id } => {
+                        #[cfg(feature = "defmt")]
+                        info!("got msg_id {} -> topic_id {}", msgid, topic_id);
+                        return Ok(topic_id);
+                    }
+                    Message::Publish { topic, payload: _ } => {
+                        // drop messages during subscription/registration process
+                        #[cfg(feature = "defmt")]
+                        info!("dropped message for topic_id {}", topic)
+                    }
+                }
+            }
+        } else {
+            unreachable!()
+        }
+    }
+
+    pub async fn publish(&'static self, topic: Topic, payload: &[u8]) -> Result<(), Error> {
+        if payload.len() > MAX_PAYLOAD_SIZE {
+            return Err(Error::PayloadTooBig)
+        }
+        let payload_vec: Vec<u8, MAX_PAYLOAD_SIZE> = Vec::from_slice(payload).unwrap();
+
+        ACTION_REQUEST_CHANNEL
+            .send(ActionRequest {
+                action: Action::Publish {
+                    topic,
+                    payload: payload_vec,
+                },
+                response_tx: self.action_response_channel.sender(),
+            })
+            .await;
+        Ok(())
     }
 
     pub async fn receive(&'static self) -> Message {

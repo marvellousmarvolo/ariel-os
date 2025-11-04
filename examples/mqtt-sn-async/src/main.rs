@@ -2,7 +2,10 @@
 #![no_std]
 
 mod pins;
-use ariel_os::debug::log::*;
+use ariel_os::{
+    debug::log::*,
+    time::{Duration, Timer},
+};
 use ariel_os_mqttsn_async::client::{Client, Message, Topic};
 
 #[ariel_os::task(autostart)]
@@ -43,35 +46,54 @@ async fn mqtt_sn_test() {
     // info!("mqtt_sn_test() end");
 }
 
+// #[ariel_os::task(autostart)]
+// async fn mqtt_sn_test2() {
+//     static MY_CLIENT: Client = Client::new();
+
+//     info!("mqtt_sn_test2()");
+
+//     let topic_id = MY_CLIENT
+//         .subscribe(Topic::from_long("my_topic"))
+//         .await
+//         .unwrap();
+//     info!("other topic_id: {}", topic_id);
+
+//     loop {
+//         let msg = MY_CLIENT.receive().await;
+//         match msg {
+//             Message::Publish { topic, payload } => {
+//                 if let Ok(utf8) = str::from_utf8(&payload) {
+//                     info!("other got message for topic_id {}: \"{}\"", topic, utf8);
+//                 } else {
+//                     info!("other got message for topic_id {} (non-utf8)", topic)
+//                 }
+//             }
+//             Message::TopicInfo { msgid, topic_id } => {
+//                 info!(
+//                     "CLIENT UNEXPECTED: got msg_id {} -> topic_id {}",
+//                     msgid, topic_id
+//                 )
+//             }
+//         }
+//     }
+// }
+
 #[ariel_os::task(autostart)]
-async fn mqtt_sn_test2() {
+async fn mqtt_sn_test3() {
     static MY_CLIENT: Client = Client::new();
 
-    info!("mqtt_sn_test2()");
+    info!("mqtt_sn_test3()");
 
     let topic_id = MY_CLIENT
-        .subscribe(Topic::from_long("my_topic"))
+        .register(Topic::from_long("my_topic"))
         .await
         .unwrap();
-    info!("other topic_id: {}", topic_id);
+    info!("publish topic_id: {}", topic_id);
 
     loop {
-        let msg = MY_CLIENT.receive().await;
-        match msg {
-            Message::Publish { topic, payload } => {
-                if let Ok(utf8) = str::from_utf8(&payload) {
-                    info!("other got message for topic_id {}: \"{}\"", topic, utf8);
-                } else {
-                    info!("other got message for topic_id {} (non-utf8)", topic)
-                }
-            }
-            Message::TopicInfo { msgid, topic_id } => {
-                info!(
-                    "CLIENT UNEXPECTED: got msg_id {} -> topic_id {}",
-                    msgid, topic_id
-                )
-            }
-        }
+        let payload = b"Test Message";
+        let _ = MY_CLIENT.publish(Topic::from_id(topic_id), payload).await;
+        Timer::after(Duration::from_millis(1000)).await;
     }
 
     // info!("mqtt_sn_test() end");
