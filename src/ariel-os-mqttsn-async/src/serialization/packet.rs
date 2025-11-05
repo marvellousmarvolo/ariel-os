@@ -88,17 +88,17 @@ pub enum Error {
 
 impl Packet<'_> {
     pub fn try_from(bytes: &[u8]) -> Result<Packet<'_>, Error> {
-        #[cfg(feature = "defmt")]
+        
         debug!("bytes: {:?}", bytes);
 
         let header = Header::try_from(bytes).unwrap();
 
-        #[cfg(feature = "defmt")]
+        
         debug!("header: {:?}", header);
 
         let msg_type = header.msg_type();
 
-        #[cfg(feature = "defmt")]
+        
         info!("msg_type: {:?}", msg_type);
 
         match msg_type {
@@ -272,7 +272,7 @@ impl Packet<'_> {
             // MsgType::WillMsgEsp => {}
             // MsgType::Encapsulated => {}
             _ => {
-                #[cfg(feature = "defmt")]
+                
                 info!("Packet not recognized");
             }
         }
