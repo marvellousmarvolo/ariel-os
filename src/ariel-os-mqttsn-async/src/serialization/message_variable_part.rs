@@ -1,9 +1,11 @@
 use crate::serialization::flags::Flags;
+#[cfg(feature = "defmt")]
 use ariel_os_debug::log::defmt;
 use bilge::prelude::*;
 
 #[bitsize(8)]
-#[derive(TryFromBits, Debug, PartialEq, defmt::Format)]
+#[derive(TryFromBits, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ReturnCode {
     Accepted = 0x00,
     RejectedCongestion = 0x01,
@@ -54,7 +56,8 @@ impl Connect {
 }
 
 #[bitsize(8)]
-#[derive(TryFromBits, DebugBits, PartialEq, defmt::Format)]
+#[derive(TryFromBits, DebugBits, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ConnAck {
     return_code: ReturnCode,
 }

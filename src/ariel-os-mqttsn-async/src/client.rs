@@ -54,7 +54,8 @@ pub enum Message {
     TopicInfo { msgid: u16, topic_id: u16 },
 }
 
-#[derive(Debug, defmt::Format, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Topic {
     Id(u16),
     ShortName([u8; 2]),
@@ -121,18 +122,18 @@ impl Client {
         if let ActionResponse::Subscription { msg_id: msgid } =
             self.action_response_channel.receive().await?
         {
-            #[cfg(feature = "defmt")]
+            
             info!("got subscribe result msgid: {}", msgid);
             loop {
                 match self.receive().await {
                     Message::TopicInfo { msgid, topic_id } => {
-                        #[cfg(feature = "defmt")]
+                        
                         info!("got msg_id {} -> topic_id {}", msgid, topic_id);
                         return Ok(topic_id);
                     }
                     Message::Publish { topic, payload: _ } => {
                         // drop messages during subscription/registration process
-                        #[cfg(feature = "defmt")]
+                        
                         info!("dropped message for topic_id {}", topic)
                     }
                 }
@@ -156,18 +157,18 @@ impl Client {
         if let ActionResponse::Registration { msg_id: msgid } =
             self.action_response_channel.receive().await?
         {
-            #[cfg(feature = "defmt")]
+            
             info!("got registration result msgid: {}", msgid);
             loop {
                 match self.receive().await {
                     Message::TopicInfo { msgid, topic_id } => {
-                        #[cfg(feature = "defmt")]
+                        
                         info!("got msg_id {} -> topic_id {}", msgid, topic_id);
                         return Ok(topic_id);
                     }
                     Message::Publish { topic, payload: _ } => {
                         // drop messages during subscription/registration process
-                        #[cfg(feature = "defmt")]
+                        
                         info!("dropped message for topic_id {}", topic)
                     }
                 }
@@ -179,7 +180,7 @@ impl Client {
 
     pub async fn publish(&'static self, topic: Topic, payload: &[u8]) -> Result<(), Error> {
         if payload.len() > MAX_PAYLOAD_SIZE {
-            return Err(Error::PayloadTooBig)
+            return Err(Error::PayloadTooBig);
         }
         let payload_vec: Vec<u8, MAX_PAYLOAD_SIZE> = Vec::from_slice(payload).unwrap();
 
@@ -192,6 +193,7 @@ impl Client {
                 response_tx: self.action_response_channel.sender(),
             })
             .await;
+        let _ = self.action_response_channel.receive().await;
         Ok(())
     }
 
