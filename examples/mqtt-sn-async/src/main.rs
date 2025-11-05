@@ -91,6 +91,7 @@ async fn mqtt_sn_test3() {
     info!("publish topic_id: {}", topic_id);
 
     loop {
+        info!("Publish iteration");
         let payload = b"Test Message";
         let _ = MY_CLIENT.publish(Topic::from_id(topic_id), payload).await;
         Timer::after(Duration::from_millis(1000)).await;

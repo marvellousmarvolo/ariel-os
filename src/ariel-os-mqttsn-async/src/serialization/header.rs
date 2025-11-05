@@ -3,7 +3,8 @@ use bilge::give_me_error;
 use bilge::prelude::*;
 
 #[bitsize(8)]
-#[derive(TryFromBits, Debug, PartialEq, defmt::Format)]
+#[derive(TryFromBits, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MsgType {
     Advertise = 0x00,
     SearchGw = 0x01,
@@ -36,20 +37,23 @@ pub enum MsgType {
 }
 
 #[bitsize(32)]
-#[derive(TryFromBits, DebugBits, PartialEq, defmt::Format)]
+#[derive(TryFromBits, DebugBits, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct HeaderLong {
     msg_type: MsgType,
     length: u24,
 }
 
 #[bitsize(16)]
-#[derive(TryFromBits, DebugBits, PartialEq, defmt::Format)]
+#[derive(TryFromBits, DebugBits, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct HeaderShort {
     msg_type: MsgType,
     length: u8,
 }
 
-#[derive(Debug, PartialEq, defmt::Format)]
+#[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Header {
     Long(HeaderLong),
     Short(HeaderShort),
@@ -97,17 +101,17 @@ impl Header {
         let mut result: [u8; 4] = [0u8; 4];
         match self {
             Header::Long(long) => {
-                #[cfg(feature = "defmt")]
+                
                 debug!("long {:?}", long.value.to_be_bytes());
                 result.copy_from_slice(&long.value.to_be_bytes()[..4])
             }
             Header::Short(short) => {
-                #[cfg(feature = "defmt")]
+                
                 debug!("short {:?}", short.value.to_be_bytes());
                 result[..2].copy_from_slice(&short.value.to_be_bytes()[..2])
             }
         }
-        #[cfg(feature = "defmt")]
+        
         debug!("result {:?}", result);
         result
     }
