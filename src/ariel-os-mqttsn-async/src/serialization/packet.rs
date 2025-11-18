@@ -88,17 +88,14 @@ pub enum Error {
 
 impl Packet<'_> {
     pub fn try_from(bytes: &[u8]) -> Result<Packet<'_>, Error> {
-        
         debug!("bytes: {:?}", bytes);
 
         let header = Header::try_from(bytes).unwrap();
 
-        
         debug!("header: {:?}", header);
 
         let msg_type = header.msg_type();
 
-        
         info!("msg_type: {:?}", msg_type);
 
         match msg_type {
@@ -272,7 +269,6 @@ impl Packet<'_> {
             // MsgType::WillMsgEsp => {}
             // MsgType::Encapsulated => {}
             _ => {
-                
                 info!("Packet not recognized");
             }
         }
@@ -310,7 +306,12 @@ impl Packet<'_> {
 
 // packet creation methods
 impl Packet<'_> {
-    pub(crate) fn connect(clean_session: bool, will: bool, client_id: &[u8]) -> Packet<'_> {
+    pub(crate) fn connect(
+        keep_alive: u16,
+        clean_session: bool,
+        will: bool,
+        client_id: &[u8],
+    ) -> Packet<'_> {
         // build "connect" packet
         let flags = Flags::new(
             TopicIdType::IdNormal,
@@ -325,7 +326,7 @@ impl Packet<'_> {
 
         Packet::Connect {
             header: Header::new(MsgType::Connect, msg_len),
-            connect: mvp::Connect::new(0x00, 0x01, flags),
+            connect: mvp::Connect::new(keep_alive, 0x01, flags),
             client_id,
         }
     }
@@ -371,6 +372,12 @@ impl Packet<'_> {
             header: Header::new(MsgType::Publish, length),
             publish: mvp::Publish::new(0x0000u16, *topic_value, flags), // msg_id 0x0000 on QoS 0 & -1
             data: payload,
+        }
+    }
+
+    pub(crate) fn ping_resp<'a>() -> Packet<'a> {
+        Packet::PingResp {
+            header: Header::new(MsgType::PingResp, 16),
         }
     }
 }

@@ -12,9 +12,9 @@ use crate::{
 
 use ariel_os::net;
 use ariel_os::reexports::embassy_time::WithTimeout; // TODO: when rebased, change to ariel_os::time::with_timeout
-use ariel_os::time::Duration;
+use ariel_os::time::{Duration, Timer};
 use ariel_os_debug::log::*;
-use ariel_os_utils::ipv4_addr_from_env_or;
+use ariel_os_utils::ipv4_addr_from_env;
 use core::net::IpAddr;
 use core::{default::Default, net::SocketAddr};
 use embassy_futures::select::{Either3, select3};
@@ -30,6 +30,13 @@ use serialization::{
 
 pub const MAX_SUBSCRIPTIONS: usize = 16;
 pub const MAX_CLIENTS: usize = 4;
+pub const T_ADV: Duration = Duration::from_secs(15 * 60);
+pub const N_ADV: usize = 3;
+pub const T_SEARCHGW: Duration = Duration::from_secs(5);
+pub const T_GWINFO: Duration = Duration::from_secs(5);
+pub const T_WAIT: Duration = Duration::from_secs(5 * 60);
+pub const T_RETRY: Duration = Duration::from_secs(15);
+pub const N_RETRY: usize = 5;
 
 // pub type MessageReceiver = Receiver<'static, CriticalSectionRawMutex, Message, 1>;
 
@@ -58,7 +65,6 @@ impl MqttPacketReceive for udp_nal::UnconnectedUdp<'_> {
     async fn receive_packet<'b>(&mut self, buf: &'b mut [u8]) -> Result<Packet<'b>, Error> {
         match self.receive_into(buf).await {
             Ok((n, _, _)) => {
-                
                 debug!("Bytes: {:?}", &buf[..n]);
                 match Packet::try_from(&buf[..n]) {
                     Ok(packet) => Ok(packet),
@@ -95,11 +101,7 @@ pub async fn start() {
     let stack = net::network_stack().await.unwrap();
     stack.wait_config_up().await;
     let local = "0.0.0.0:1234".parse().unwrap();
-    let remote_ip = ipv4_addr_from_env_or!(
-        "MQTT_BROKER_ADDR",
-        "10.42.0.1",
-        "static IPv4 MQTT broker address"
-    );
+    let remote_ip = ipv4_addr_from_env!("MQTT_BROKER_ADDR", "static IPv4 MQTT broker address");
     let remote = SocketAddr::new(IpAddr::V4(remote_ip), 1884);
 
     let mut rx_meta = [PacketMetadata::EMPTY; 16];
@@ -154,18 +156,15 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         // TODO: handle errors
         loop {
             while self.state == State::Disconnected {
-                if let Err(e) = self.connect(60000, b"ariel", false, false).await {
+                if let Err(e) = self.connect(0, b"ariel", false, false).await {
                     match e {
                         Error::Timeout => {
-                            
                             info!("TIMEOUT ERROR")
                         }
                         Error::TransmissionFailed => {
-                            
                             info!("TRANSMISSION ERROR")
                         }
                         _ => {
-                            
                             info!("OTHER ERROR")
                         }
                     }
@@ -184,18 +183,17 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 .await
                 {
                     Either3::First(Ok(packet)) => {
-                        
                         info!("got packet");
                         self.handle_packet(packet).await.unwrap();
                     }
-                    Either3::First(Err(_)) => todo!(),
+                    Either3::First(Err(_)) => {
+                        info!("got receive_packet error!");
+                    }
                     Either3::Second(action_request) => {
-                        
                         info!("got action");
                         self.handle_action_request(action_request).await.unwrap();
                     }
                     Either3::Third(_) => {
-                        
                         info!("got config down");
                         self.state = State::Disconnected;
                         break;
@@ -223,7 +221,6 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
     async fn handle_action(&mut self, action: Action) -> Result<ActionResponse, Error> {
         match action {
             Action::Subscribe { topic, message_tx } => {
-                
                 info!("subscribe");
 
                 // TODO: check here if there is actually a free subscriber slot?
@@ -239,7 +236,6 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 }
             }
             Action::Register { topic, message_tx } => {
-                
                 info!("register");
 
                 if self.msg_id_map.capacity() > self.msg_id_map.len() {
@@ -251,7 +247,6 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 }
             }
             Action::Publish { topic, payload } => {
-                
                 info!("publish");
 
                 self.publish(topic, &payload).await?;
@@ -281,8 +276,8 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 header: _,
                 client_id,
             } => {
-                
-                info!("TODO: PingReq {:?}", client_id)
+                info!("PingReq {:?}", client_id);
+                let _ = self.ping_resp();
             }
             _ => panic!("Unexpected message type received"),
         }
@@ -292,13 +287,12 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
     async fn handle_sub_ack(&mut self, sub_ack: SubAck) -> Result<(), Error> {
         let return_code = sub_ack.get_return_code();
 
-        
         info!("SubAck {:?}", return_code);
 
         match return_code {
             ReturnCode::Accepted => {
                 let topic_id = sub_ack.get_topic_id();
-                
+
                 info!("received Topic Id {:?}", topic_id);
 
                 if let Some(Some(message_tx)) = self.msg_id_map.remove(&sub_ack.get_msg_id()) {
@@ -318,37 +312,44 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                                 topic_id,
                             })
                             .await;
-                        Ok(())
                     } else {
-                        
                         info!("no free consumer slot");
                         // TODO: unsubscribe now or not
-                        Err(Error::NoFreeSubscriberSlot)
+                        return Err(Error::NoFreeSubscriberSlot);
                     }
                 } else {
-                    
                     info!("No return channel for received msg_id. Ignore SubAck");
-                    // TODO: unsubscribe now or not
-                    Ok(())
                 }
             }
-            ReturnCode::RejectedCongestion => Err(Error::Rejected),
-            ReturnCode::RejectedInvalidTopicId => Err(Error::Rejected),
-            ReturnCode::RejectedNotSupported => Err(Error::Rejected),
+            ReturnCode::RejectedCongestion => {
+                let msg_id = &sub_ack.get_msg_id();
+                info!(
+                    "received congestion warning for message {}. Try again in {} seconds",
+                    msg_id,
+                    T_WAIT.as_secs()
+                );
+
+                if let Some(Some(message_tx)) = self.msg_id_map.remove(msg_id) {
+                    message_tx.send(Message::Congestion).await;
+                } else {
+                    info!("No return channel for received msg_id. Ignore SubAck");
+                }
+            }
+            ReturnCode::RejectedInvalidTopicId => return Err(Error::Rejected),
+            ReturnCode::RejectedNotSupported => return Err(Error::Rejected),
         }
+        Ok(())
     }
 
     async fn handle_reg_ack(&mut self, reg_ack: RegAck) -> Result<(), Error> {
         let return_code = reg_ack.get_return_code();
 
-        
         info!("RegAck {:?}", return_code);
 
         match return_code {
             ReturnCode::Accepted => {
                 let topic_id = reg_ack.get_topic_id();
 
-                
                 info!("received Topic Id {:?}", topic_id);
 
                 if let Some(Some(message_tx)) = self.msg_id_map.remove(&reg_ack.get_msg_id()) {
@@ -358,22 +359,33 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                             topic_id,
                         })
                         .await;
-                    Ok(())
                 } else {
-                    
                     info!("No return channel for received msg_id. Ignore RegAck");
-                    Ok(())
                 }
             }
-            ReturnCode::RejectedCongestion => Err(Error::Rejected),
-            ReturnCode::RejectedInvalidTopicId => Err(Error::Rejected),
-            ReturnCode::RejectedNotSupported => Err(Error::Rejected),
+            ReturnCode::RejectedCongestion => {
+                let msg_id = &sub_ack.get_msg_id();
+                info!(
+                    "received congestion warning for message {}. Try again in {} seconds",
+                    msg_id,
+                    T_WAIT.as_secs()
+                );
+
+                if let Some(Some(message_tx)) = self.msg_id_map.remove(msg_id) {
+                    message_tx.send(Message::Congestion).await;
+                } else {
+                    info!("No return channel for received msg_id. Ignore RegAck");
+                }
+            },
+            ReturnCode::RejectedInvalidTopicId => return Err(Error::Rejected),
+            ReturnCode::RejectedNotSupported => return Err(Error::Rejected),
         }
+        Ok(())
     }
 
     async fn handle_publish(&mut self, publish: &Publish, data: Payload) -> Result<(), Error> {
         let topic_id = publish.get_topic_id();
-        
+
         info!("publish topic={}", topic_id);
 
         // send PubAck w/ return code Rejected if topic_id is not found
@@ -394,37 +406,34 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 channel_bitmap = channel_bitmap & !bit;
             }
         }
-
         Ok(())
     }
 
     pub async fn connect(
         &mut self,
-        duration_millis: u16,
+        keep_alive: u16,
         client_id: &[u8],
         will: bool,
         clean_session: bool,
     ) -> Result<(), Error> {
-        
         info!("connect");
         self.check_state(State::Disconnected)?;
         let mut buf: [u8; MAX_PAYLOAD_SIZE + 32] = [0; MAX_PAYLOAD_SIZE + 32];
 
-        let packet = Packet::connect(clean_session, will, client_id);
-        
+        let packet = Packet::connect(keep_alive, clean_session, will, client_id);
+
         info!("connect: send");
         {
             let packet_slice = packet.write_to_buf(&mut buf);
             self.send_packet(packet_slice).await?;
         }
 
-        
         info!("connect: recv");
         // wait for connack
         match self
             .socket
             .receive_packet(&mut buf)
-            .with_timeout(Duration::from_millis(duration_millis as u64))
+            .with_timeout(T_RETRY)
             .await
             .map_err(|_| Error::Timeout)??
         {
@@ -434,26 +443,23 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
             } => match conn_ack.get_return_code() {
                 ReturnCode::Accepted => {
                     self.state = State::Active;
-                    
                     info!("connected");
-                    Ok(())
                 }
                 ReturnCode::RejectedCongestion => todo!(),
                 ReturnCode::RejectedInvalidTopicId => todo!(),
                 ReturnCode::RejectedNotSupported => todo!(),
             },
             _ => {
-                
                 info!("Transmission failed!");
-                Err(Error::TransmissionFailed)
+                return Err(Error::TransmissionFailed);
             }
         }
+        Ok(())
     }
 
     pub async fn subscribe(&mut self, topic: Topic, dup: bool, qos: QoS) -> Result<u16, Error> {
         let msg_id = self.get_next_msg_id();
 
-        
         info!(
             "send subscribe. state: {:?}. msg_id: {:?}",
             self.state, msg_id
@@ -475,7 +481,6 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
     pub async fn register(&mut self, topic: Topic) -> Result<u16, Error> {
         let msg_id = self.get_next_msg_id();
 
-        
         info!(
             "send register. state: {:?}. msg_id: {:?}",
             self.state, msg_id
@@ -509,6 +514,20 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         Ok(())
     }
 
+    async fn ping_resp(&mut self) -> Result<(), Error> {
+        // fixed packet size
+        let mut buf: [u8; 16] = [0; 16];
+
+        let packet = Packet::ping_resp();
+
+        {
+            let packet_slice = packet.write_to_buf(&mut buf);
+            self.send_packet(packet_slice).await?;
+        }
+
+        Ok(())
+    }
+
     async fn send_packet(&mut self, buf: &[u8]) -> Result<(), Error> {
         match self.socket.send(self.local, self.remote, &buf).await {
             Ok(_) => Ok(()),
@@ -529,14 +548,3 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         msg_id
     }
 }
-
-// async fn ping() -> Result<(), Error> {
-//     const MSG_LEN: u16 = 16;
-//     let packet = Packet::PingResp {
-//         header: Header::new(MsgType::PingResp, MSG_LEN),
-//     };
-//     let mut send_buf = [0u8; MSG_LEN];
-//     packet.write_to_buf(send_buf);
-//     send(send_buf, MSG_LEN).await?;
-//     Ok(())
-// }

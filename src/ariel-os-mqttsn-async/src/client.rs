@@ -1,4 +1,5 @@
-use crate::error::Error;
+use crate::{T_WAIT, error::Error};
+use ariel_os::time::Timer;
 use ariel_os_debug::log::*;
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
@@ -52,6 +53,7 @@ pub enum Action {
 pub enum Message {
     Publish { topic: u16, payload: Payload },
     TopicInfo { msgid: u16, topic_id: u16 },
+    Congestion,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -109,72 +111,78 @@ impl Client {
     }
 
     pub async fn subscribe(&'static self, topic: Topic) -> Result<u16, Error> {
-        ACTION_REQUEST_CHANNEL
-            .send(ActionRequest {
-                action: Action::Subscribe {
-                    topic,
-                    message_tx: self.message_channel.sender(),
-                },
-                response_tx: self.action_response_channel.sender(),
-            })
-            .await;
+        loop {
+            ACTION_REQUEST_CHANNEL
+                .send(ActionRequest {
+                    action: Action::Subscribe {
+                        topic: topic.clone(),
+                        message_tx: self.message_channel.sender(),
+                    },
+                    response_tx: self.action_response_channel.sender(),
+                })
+                .await;
 
-        if let ActionResponse::Subscription { msg_id: msgid } =
-            self.action_response_channel.receive().await?
-        {
-            
-            info!("got subscribe result msgid: {}", msgid);
-            loop {
-                match self.receive().await {
-                    Message::TopicInfo { msgid, topic_id } => {
-                        
-                        info!("got msg_id {} -> topic_id {}", msgid, topic_id);
-                        return Ok(topic_id);
-                    }
-                    Message::Publish { topic, payload: _ } => {
-                        // drop messages during subscription/registration process
-                        
-                        info!("dropped message for topic_id {}", topic)
+            if let ActionResponse::Subscription { msg_id: msgid } =
+                self.action_response_channel.receive().await?
+            {
+                info!("got subscribe result msgid: {}", msgid);
+                loop {
+                    match self.receive().await {
+                        Message::TopicInfo { msgid, topic_id } => {
+                            info!("got msg_id {} -> topic_id {}", msgid, topic_id);
+                            return Ok(topic_id);
+                        }
+                        Message::Publish { topic, payload: _ } => {
+                            // drop messages during subscription/registration process
+                            info!("dropped message for topic_id {}", topic);
+                        }
+                        Message::Congestion => {
+                            Timer::after(T_WAIT).await;
+                            break;
+                        }
                     }
                 }
+            } else {
+                unreachable!()
             }
-        } else {
-            unreachable!()
         }
     }
 
     pub async fn register(&'static self, topic: Topic) -> Result<u16, Error> {
-        ACTION_REQUEST_CHANNEL
-            .send(ActionRequest {
-                action: Action::Register {
-                    topic,
-                    message_tx: self.message_channel.sender(),
-                },
-                response_tx: self.action_response_channel.sender(),
-            })
-            .await;
+        loop {
+            ACTION_REQUEST_CHANNEL
+                .send(ActionRequest {
+                    action: Action::Register {
+                        topic: topic.clone(),
+                        message_tx: self.message_channel.sender(),
+                    },
+                    response_tx: self.action_response_channel.sender(),
+                })
+                .await;
 
-        if let ActionResponse::Registration { msg_id: msgid } =
-            self.action_response_channel.receive().await?
-        {
-            
-            info!("got registration result msgid: {}", msgid);
-            loop {
-                match self.receive().await {
-                    Message::TopicInfo { msgid, topic_id } => {
-                        
-                        info!("got msg_id {} -> topic_id {}", msgid, topic_id);
-                        return Ok(topic_id);
-                    }
-                    Message::Publish { topic, payload: _ } => {
-                        // drop messages during subscription/registration process
-                        
-                        info!("dropped message for topic_id {}", topic)
+            if let ActionResponse::Registration { msg_id: msgid } =
+                self.action_response_channel.receive().await?
+            {
+                info!("got registration result msgid: {}", msgid);
+                loop {
+                    match self.receive().await {
+                        Message::TopicInfo { msgid, topic_id } => {
+                            info!("got msg_id {} -> topic_id {}", msgid, topic_id);
+                            return Ok(topic_id);
+                        }
+                        Message::Publish { topic, payload: _ } => {
+                            // drop messages during subscription/registration process
+                            info!("dropped message for topic_id {}", topic)
+                        }
+                        Message::Congestion => {
+                            Timer::after(T_WAIT).await;
+                            break;
+                        }
                     }
                 }
+            } else {
+                unreachable!()
             }
-        } else {
-            unreachable!()
         }
     }
 
