@@ -10,13 +10,17 @@ use crate::{
     serialization::message_variable_part::{RegAck, SubAck},
 };
 
-use ariel_os::net;
-use ariel_os::reexports::embassy_time::WithTimeout; // TODO: when rebased, change to ariel_os::time::with_timeout
-use ariel_os::time::{Duration, Timer};
+use ariel_os::{
+    net,
+    reexports::embassy_time::WithTimeout, // TODO: when rebased, change to ariel_os::time::with_timeout
+    time::{Duration, Timer},
+};
 use ariel_os_debug::log::*;
 use ariel_os_utils::ipv4_addr_from_env;
-use core::net::IpAddr;
-use core::{default::Default, net::SocketAddr};
+use core::{
+    default::Default,
+    net::{IpAddr, SocketAddr},
+};
 use embassy_futures::select::{Either3, select3};
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver};
@@ -159,13 +163,13 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 if let Err(e) = self.connect(0, b"ariel", false, false).await {
                     match e {
                         Error::Timeout => {
-                            info!("TIMEOUT ERROR")
+                            info!("TIMEOUT ERROR");
                         }
                         Error::TransmissionFailed => {
-                            info!("TRANSMISSION ERROR")
+                            info!("TRANSMISSION ERROR");
                         }
                         _ => {
-                            info!("OTHER ERROR")
+                            info!("OTHER ERROR");
                         }
                     }
                 }
@@ -364,7 +368,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 }
             }
             ReturnCode::RejectedCongestion => {
-                let msg_id = &sub_ack.get_msg_id();
+                let msg_id = &reg_ack.get_msg_id();
                 info!(
                     "received congestion warning for message {}. Try again in {} seconds",
                     msg_id,
@@ -376,7 +380,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 } else {
                     info!("No return channel for received msg_id. Ignore RegAck");
                 }
-            },
+            }
             ReturnCode::RejectedInvalidTopicId => return Err(Error::Rejected),
             ReturnCode::RejectedNotSupported => return Err(Error::Rejected),
         }

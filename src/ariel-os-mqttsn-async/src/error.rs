@@ -9,6 +9,7 @@ pub enum Error {
     TransmissionFailed,
     ConversionFailed,
     Rejected,
+    Congestion,
     InvalidIdType,
     NoFreeSubscriberSlot,
     PayloadTooBig,
