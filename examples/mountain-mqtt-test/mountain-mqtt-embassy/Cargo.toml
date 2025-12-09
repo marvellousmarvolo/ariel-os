@@ -1,0 +1,29 @@
+[package]
+name = "mountain-mqtt-embassy"
+version = "0.2.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+keywords = ["mqtt", "embassy"]
+categories = [
+  "asynchronous",
+  "embedded",
+  "network-programming",
+  "no-std::no-alloc",
+  "encoding",
+]
+description = "A no_std compatible, async MQTT v5 client for embassy, using mountain-mqtt"
+repository = "https://github.com/mountainlizard/mountain-mqtt-embassy"
+readme = "README.md"
+
+[dependencies]
+ariel-os = { path = "../../../src/ariel-os", features = ["tcp", "usb", "time"] }
+ariel-os-debug.workspace = true
+embassy-sync.workspace = true
+
+mountain-mqtt = { version = "0.2.0", path = "../mountain-mqtt", default-features = false, features = [
+  "embedded-io-async",
+  "embedded-hal-async",
+] }
+
+[features]
+defmt = ["ariel-os-debug/defmt", "mountain-mqtt/defmt"]
