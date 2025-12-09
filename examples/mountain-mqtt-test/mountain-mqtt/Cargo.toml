@@ -1,0 +1,42 @@
+[package]
+name = "mountain-mqtt"
+version = "0.2.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+keywords = ["mqtt", "tokio", "embedded-hal-async"]
+categories = [
+  "asynchronous",
+  "embedded",
+  "network-programming",
+  "no-std::no-alloc",
+  "encoding",
+]
+description = "A no_std compatible, async MQTT v5 client for tokio and embedded use"
+repository = "https://github.com/mountainlizard/mountain-mqtt"
+readme = "README.md"
+
+[dependencies]
+heapless = "0.8"
+
+embedded-io = { version = "0.6", optional = true }
+embedded-io-async = { version = "0.6", optional = true }
+
+embedded-hal-async = { version = "1.0", optional = true }
+defmt = { version = "0.3", optional = true }
+
+tokio = { version = "1", features = ["full"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+embedded-io = "0.6"
+embedded-io-async = "0.6"
+embedded-hal-async = "1.0"
+tokio-test = { version = "0.4.2" }
+
+[features]
+default = ["tokio", "embedded-io-async", "embedded-hal-async", "defmt"]
+tokio = ["dep:tokio", "std"]
+defmt = ["dep:defmt"]
+embedded-io-async = ["dep:embedded-io-async", "dep:embedded-io"]
+embedded-hal-async = ["dep:embedded-hal-async"]
+std = []

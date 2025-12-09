@@ -1,0 +1,29 @@
+[package]
+name = "mountain-mqtt-test"
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# ariel-os = { path = "../../src/ariel-os", features = ["udp", "usb", "external-interrupts", "defmt"] }
+ariel-os = { path = "../../src/ariel-os", features = ["udp", "usb", "external-interrupts"] }
+
+mountain-mqtt = { path = "./mountain-mqtt", default-features = false, features = [
+  "embedded-io-async",
+  "embedded-hal-async"
+  # "defmt"
+] }
+# mountain-mqtt-embassy = { path = "./mountain-mqtt-embassy", features = ["defmt"]}
+mountain-mqtt-embassy = { path = "./mountain-mqtt-embassy"}
+
+
+serde = { version = "1.0.209", default-features = false, features = ["derive"] }
+serde-json-core = "0.6.0"
+
+static_cell.workspace = true
+
+embassy-sync.workspace = true
+embassy-futures.workspace = true
