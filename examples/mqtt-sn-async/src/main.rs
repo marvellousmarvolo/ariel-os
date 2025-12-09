@@ -139,10 +139,12 @@ async fn mqtt_sn_test4(peripherals: pins::LedPeripherals) {
                         }
                     }
                 } else {
-                    info!("got message for topic_id {} (non-utf8)", topic)
+                    info!("got message for topic_id {} (non-utf8)", topic);
                 }
             }
-            _ => info!("MESSAGE UNEXPECTED"),
+            _ => {
+                info!("MESSAGE UNEXPECTED");
+            }
         }
     }
 }

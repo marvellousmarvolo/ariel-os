@@ -172,7 +172,7 @@ impl Client {
                         }
                         Message::Publish { topic, payload: _ } => {
                             // drop messages during subscription/registration process
-                            info!("dropped message for topic_id {}", topic)
+                            info!("dropped message for topic_id {}", topic);
                         }
                         Message::Congestion => {
                             Timer::after(T_WAIT).await;
