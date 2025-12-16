@@ -47,6 +47,9 @@ pub enum Action {
         topic: Topic,
         payload: Payload,
     },
+    Disconnect {
+        duration: Option<u16>
+    }
 }
 
 #[derive(Clone)]

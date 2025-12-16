@@ -198,12 +198,19 @@ impl SubAck {
     }
 }
 
-#[bitsize(40)]
+#[bitsize(24)]
 #[derive(TryFromBits, DebugBits, PartialEq)]
 pub struct Unsubscribe {
-    topic_id: u16, // or topic_name length n
     msg_id: u16,
     flags: Flags,
+}
+
+impl Unsubscribe {
+    pub const SIZE: usize = 3;
+
+    pub fn to_be_bytes(&self) -> [u8; Self::SIZE] {
+        self.value.to_be_bytes()
+    }
 }
 
 #[bitsize(16)]
@@ -212,11 +219,11 @@ pub struct UnsubAck {
     msg_id: u16,
 }
 
-#[bitsize(16)]
-#[derive(TryFromBits, DebugBits, PartialEq)]
-pub struct Disconnect {
-    duration: u16, // optional
-}
+// #[bitsize(16)]
+// #[derive(TryFromBits, DebugBits, PartialEq)]
+// pub struct Disconnect {
+//     duration: u16, // optional
+// }
 
 // pub struct WillTopicUpd {
 //     will_topic: u8,
