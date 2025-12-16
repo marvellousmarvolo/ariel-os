@@ -20,6 +20,10 @@ pub enum Packet<'a> {
         connect: mvp::Connect,
         client_id: &'a [u8],
     },
+    Disconnect {
+        header: Header,
+        duration: Option<u16>,
+    },
     ConnAck {
         header: Header,
         conn_ack: mvp::ConnAck,
@@ -47,18 +51,18 @@ pub enum Packet<'a> {
         header: Header,
         sub_ack: mvp::SubAck,
     },
+    Unsubscribe {
+        header: Header,
+        unsubscribe: mvp::Unsubscribe,
+        topic: &'a Topic,
+    },
     PingReq {
         header: Header,
-        client_id: &'a [u8], // >= 2
+        client_id: &'a [u8], // >= 1
     },
     PingResp {
         header: Header,
     },
-    // SearchGw {
-    //     // delay sending randomly
-    //     header: Header,
-    //     search_gw: mvp::SearchGw,
-    // },
 }
 
 macro_rules! construct_buffer {
@@ -195,7 +199,23 @@ impl Packet<'_> {
                 })
             }
             // MsgType::PingResp => {}
-            // MsgType::Disconnect => {}
+            MsgType::Disconnect => {
+                let size = header.size();
+
+                match size > header.length() {
+                    true => {
+                        let duration_bytes: [u8; 2] = bytes[size..size + 2].try_into().unwrap();
+                        Ok(Packet::Disconnect {
+                            header,
+                            duration: Some(u16::from_be_bytes(duration_bytes)),
+                        })
+                    }
+                    false => Ok(Packet::Disconnect {
+                        header,
+                        duration: None,
+                    }),
+                }
+            }
             // MsgType::WillTopicUpd => {}
             // MsgType::WillTopicEsp => {}
             // MsgType::WillMsgUpd => {}
@@ -258,11 +278,24 @@ impl Packet<'_> {
             // MsgType::SubAck => {} // no send
             // MsgType::Unsubscribe => {}
             // MsgType::UnsubAck => {}
-            // MsgType::PingReq => {}
+            Packet::PingReq { header, client_id } => {
+                buf[..header.size()].copy_from_slice(&header.to_be_bytes()[..header.size()]);
+                buf[header.size()..header.size() + client_id.len()].copy_from_slice(client_id);
+            }
             Packet::PingResp { header } => {
                 buf[..header.size()].copy_from_slice(&header.to_be_bytes()[..header.size()]);
             }
-            // MsgType::Disconnect => {}
+            Packet::Disconnect { header, duration } => match duration {
+                Some(duration_value) => {
+                    let duration_bytes = duration_value.to_be_bytes();
+                    buf[..header.size()].copy_from_slice(&header.to_be_bytes()[..header.size()]);
+                    buf[header.size()..header.size() + duration_bytes.len()]
+                        .copy_from_slice(&duration_bytes);
+                }
+                None => {
+                    buf[..header.size()].copy_from_slice(&header.to_be_bytes()[..header.size()])
+                }
+            },
             // MsgType::WillTopicUpd => {}
             // MsgType::WillTopicEsp => {}
             // MsgType::WillMsgUpd => {}
@@ -284,8 +317,10 @@ impl Packet<'_> {
             Packet::Publish { header, .. } => header.msg_type(),
             Packet::Subscribe { header, .. } => header.msg_type(),
             Packet::SubAck { header, .. } => header.msg_type(),
+            Packet::Unsubscribe { header, .. } => header.msg_type(),
             Packet::PingReq { header, .. } => header.msg_type(),
             Packet::PingResp { header, .. } => header.msg_type(),
+            Packet::Disconnect { header, .. } => header.msg_type(),
         }
     }
 
@@ -298,8 +333,10 @@ impl Packet<'_> {
             Packet::Publish { header, .. } => header.length(),
             Packet::Subscribe { header, .. } => header.length(),
             Packet::SubAck { header, .. } => header.length(),
+            Packet::Unsubscribe { header, .. } => header.length(),
             Packet::PingReq { header, .. } => header.length(),
             Packet::PingResp { header, .. } => header.length(),
+            Packet::Disconnect { header, .. } => header.length(),
         }
     }
 }
@@ -322,12 +359,25 @@ impl Packet<'_> {
             false,
         );
 
-        let msg_len = calculate_message_length(client_id.len(), mvp::Connect::SIZE);
+        let msg_len = calculate_message_length(client_id.len() + mvp::Connect::SIZE);
 
         Packet::Connect {
             header: Header::new(MsgType::Connect, msg_len),
             connect: mvp::Connect::new(keep_alive, 0x01, flags),
             client_id,
+        }
+    }
+
+    pub(crate) fn disconnect<'a>(duration: Option<u16>) -> Packet<'a> {
+        match duration {
+            Some(duration_value) => Packet::Disconnect {
+                header: Header::new(MsgType::Disconnect, calculate_message_length(2)),
+                duration: Some(duration_value),
+            },
+            None => Packet::Disconnect {
+                header: Header::new(MsgType::Disconnect, calculate_message_length(0)),
+                duration: None,
+            },
         }
     }
 
@@ -338,7 +388,7 @@ impl Packet<'_> {
         msg_id: u16,
     ) -> Packet<'a> {
         let flags = Flags::new(topic.into(), true, false, false, qos, dup);
-        let msg_len = calculate_message_length(topic.len(), mvp::Subscribe::SIZE);
+        let msg_len = calculate_message_length(topic.len() + mvp::Subscribe::SIZE);
 
         Packet::Subscribe {
             header: Header::new(MsgType::Subscribe, msg_len),
@@ -347,8 +397,19 @@ impl Packet<'_> {
         }
     }
 
+    pub(crate) fn unsubscribe<'a>(topic: &'a crate::Topic, msg_id: u16) -> Packet<'a> {
+        let flags = Flags::new(topic.into(), false, false, false, QoS::Zero, false);
+        let msg_len = calculate_message_length(topic.len() + mvp::Unsubscribe::SIZE);
+
+        Packet::Unsubscribe {
+            header: Header::new(MsgType::Subscribe, msg_len),
+            unsubscribe: mvp::Unsubscribe::new(msg_id, flags),
+            topic: &topic,
+        }
+    }
+
     pub(crate) fn register<'a>(topic: &'a crate::Topic, msg_id: u16) -> Packet<'a> {
-        let msg_len = calculate_message_length(topic.len(), mvp::Register::SIZE);
+        let msg_len = calculate_message_length(topic.len() + mvp::Register::SIZE);
 
         Packet::Register {
             header: Header::new(MsgType::Register, msg_len),
@@ -366,12 +427,19 @@ impl Packet<'_> {
 
         let flags = Flags::new(topic_id_type, false, false, false, qos, false);
 
-        let length = calculate_message_length(payload.len(), mvp::Publish::SIZE);
+        let length = calculate_message_length(payload.len() + mvp::Publish::SIZE);
 
         Packet::Publish {
             header: Header::new(MsgType::Publish, length),
             publish: mvp::Publish::new(0x0000u16, *topic_value, flags), // msg_id 0x0000 on QoS 0 & -1
             data: payload,
+        }
+    }
+
+    pub(crate) fn ping_req<'a>(client_id: &'a [u8]) -> Packet<'a> {
+        Packet::PingReq {
+            header: Header::new(MsgType::PingReq, 16),
+            client_id,
         }
     }
 

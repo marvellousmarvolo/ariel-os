@@ -154,13 +154,11 @@ impl TryFrom<&[u8]> for Header {
     }
 }
 
-pub(crate) fn calculate_message_length(payload_len: usize, mvp_byte_len: usize) -> u16 {
-    let mvp_len = payload_len + mvp_byte_len;
-
-    if (mvp_len + HeaderShort::BITS / 8) > 256 {
-        (mvp_len + HeaderLong::BITS / 8) as u16
+pub(crate) fn calculate_message_length(payload_len: usize) -> u16 {
+    if (payload_len + HeaderShort::BITS / 8) > 256 {
+        (payload_len + HeaderLong::BITS / 8) as u16
     } else {
-        (mvp_len + HeaderShort::BITS / 8) as u16
+        (payload_len + HeaderShort::BITS / 8) as u16
     }
 }
 

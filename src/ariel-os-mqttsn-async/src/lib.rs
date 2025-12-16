@@ -2,26 +2,30 @@
 pub mod client;
 pub mod error;
 pub mod serialization;
+pub mod settings;
 pub mod udp_nal;
 
 use crate::error::Error;
+use crate::serialization::header::{HeaderLong, HeaderShort, calculate_message_length};
 use crate::{
     client::*,
     serialization::message_variable_part::{RegAck, SubAck},
 };
 
+use ariel_os::time::Timer;
 use ariel_os::{
     net,
     reexports::embassy_time::WithTimeout, // TODO: when rebased, change to ariel_os::time::with_timeout
-    time::{Duration, Timer},
+    time::Duration,
 };
 use ariel_os_debug::log::*;
 use ariel_os_utils::ipv4_addr_from_env;
+use bilge::Bitsized;
 use core::{
     default::Default,
     net::{IpAddr, SocketAddr},
 };
-use embassy_futures::select::{Either3, select3};
+use embassy_futures::select::{Either4, select4};
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver};
 use embedded_nal_async::UnconnectedUdp;
@@ -31,6 +35,7 @@ use serialization::{
     message_variable_part::{Publish, ReturnCode},
     packet::Packet,
 };
+use settings::Settings;
 
 pub const MAX_SUBSCRIPTIONS: usize = 16;
 pub const MAX_CLIENTS: usize = 4;
@@ -41,10 +46,6 @@ pub const T_GWINFO: Duration = Duration::from_secs(5);
 pub const T_WAIT: Duration = Duration::from_secs(5 * 60);
 pub const T_RETRY: Duration = Duration::from_secs(15);
 pub const N_RETRY: usize = 5;
-
-// pub type MessageReceiver = Receiver<'static, CriticalSectionRawMutex, Message, 1>;
-
-// type MsgIdSubscriptionMap = LinearMap<u16, u16, MAX_SUBSCRIPTIONS>;
 
 /// Contains the mapping between the Topic ID of a subscription and a bitmap indicating which Clients shall receive the incoming Message
 type TopicMap = LinearMap<u16, u16, MAX_SUBSCRIPTIONS>;
@@ -101,7 +102,7 @@ impl RegisterSubscriber for TopicMap {
 }
 
 #[embassy_executor::task]
-pub async fn start() {
+pub async fn start(settings: Settings<'static>) {
     let stack = net::network_stack().await.unwrap();
     stack.wait_config_up().await;
     let local = "0.0.0.0:1234".parse().unwrap();
@@ -125,24 +126,26 @@ pub async fn start() {
         .await
         .unwrap();
 
-    let action_rx = ACTION_REQUEST_CHANNEL.receiver();
     let mut connection = MqttsnConnection {
+        client_id: settings.client_id(),
         msg_id: 0,
         stack,
         socket,
         local,
         remote,
-        action_rx,
+        action_rx: ACTION_REQUEST_CHANNEL.receiver(),
         state: State::Disconnected,
         topic_map: TopicMap::new(),
         message_tx_list: MessageTxList::default(),
         msg_id_map: MsgIdMap::new(),
+        keepalive: settings.keepalive(),
     };
 
     connection.run().await;
 }
 
 pub struct MqttsnConnection<'a, 'ch> {
+    client_id: &'a [u8],
     stack: net::NetworkStack,
     state: State,
     local: SocketAddr,
@@ -153,14 +156,17 @@ pub struct MqttsnConnection<'a, 'ch> {
     topic_map: TopicMap,
     message_tx_list: MessageTxList,
     msg_id_map: MsgIdMap,
+    keepalive: u16,
 }
 
 impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
     async fn run(&mut self) {
-        // TODO: handle errors
         loop {
             while self.state == State::Disconnected {
-                if let Err(e) = self.connect(0, b"ariel", false, false).await {
+                if let Err(e) = self
+                    .connect(self.keepalive, self.client_id, false, false)
+                    .await
+                {
                     match e {
                         Error::Timeout => {
                             info!("TIMEOUT ERROR");
@@ -175,32 +181,43 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 }
             }
 
-            // TODO: "32" is arbitrary, check MAX_PAYLOAD_SIZE and add appropriate header length
-            let mut rx_buf = [0; MAX_PAYLOAD_SIZE + 32];
-            loop {
+            const HEADER_SIZE: usize = match MAX_PAYLOAD_SIZE > 256 as usize {
+                true => HeaderLong::BITS,
+                false => HeaderShort::BITS,
+            };
+            let mut rx_buf = [0; MAX_PAYLOAD_SIZE + HEADER_SIZE];
+
+            while self.state == State::Active {
                 // TODO: Cancel-Safety of select statement
-                match select3(
+                match select4(
                     self.socket.receive_packet(&mut rx_buf),
-                    self.action_rx.receive(),
+                    self.action_rx.receive(), //receive with_timeout / Deadline!!
                     self.stack.wait_config_down(),
+                    match self.keepalive > 0 {
+                        true => Timer::after_secs(self.keepalive.into()),
+                        false => Timer::after(Duration::MAX),
+                    },
                 )
                 .await
                 {
-                    Either3::First(Ok(packet)) => {
-                        info!("got packet");
+                    Either4::First(Ok(packet)) => {
+                        info!("Got packet. Start handling...");
                         self.handle_packet(packet).await.unwrap();
                     }
-                    Either3::First(Err(_)) => {
-                        info!("got receive_packet error!");
+                    Either4::First(Err(_)) => {
+                        info!("Got receive_packet error. Ignoring...");
                     }
-                    Either3::Second(action_request) => {
-                        info!("got action");
+                    Either4::Second(action_request) => {
+                        info!("Got action");
                         self.handle_action_request(action_request).await.unwrap();
                     }
-                    Either3::Third(_) => {
-                        info!("got config down");
+                    Either4::Third(_) => {
+                        info!("Got config down. Attempting to reconnect...");
                         self.state = State::Disconnected;
-                        break;
+                    }
+                    Either4::Fourth(_) => {
+                        info!("Got keepalive timeout. Sending Ping Request...");
+                        let _ = self.ping_req().await;
                     }
                 }
             }
@@ -226,15 +243,12 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         match action {
             Action::Subscribe { topic, message_tx } => {
                 info!("subscribe");
-
-                // TODO: check here if there is actually a free subscriber slot?
-
-                // identify by message ID, pre-reserve id_map slot
+                // identify by message ID, reserve msg_id_map slot
                 if self.msg_id_map.capacity() > self.msg_id_map.len() {
-                    let msgid = self.subscribe(topic, false, QoS::Zero).await?;
+                    let msg_id = self.subscribe(topic, false, QoS::Zero).await?;
                     // always succeeds, space checked above. can ignore error.
-                    let _ = self.msg_id_map.insert(msgid, Some(message_tx));
-                    Ok(ActionResponse::Subscription { msg_id: msgid })
+                    let _ = self.msg_id_map.insert(msg_id, Some(message_tx));
+                    Ok(ActionResponse::Subscription { msg_id })
                 } else {
                     Err(Error::NoFreeSubscriberSlot)
                 }
@@ -243,9 +257,10 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 info!("register");
 
                 if self.msg_id_map.capacity() > self.msg_id_map.len() {
-                    let msgid = self.register(topic).await?;
-                    let _ = self.msg_id_map.insert(msgid, Some(message_tx));
-                    Ok(ActionResponse::Registration { msg_id: msgid })
+                    let msg_id = self.register(topic).await?;
+                    // always succeeds, space checked above. can ignore error.
+                    let _ = self.msg_id_map.insert(msg_id, Some(message_tx));
+                    Ok(ActionResponse::Registration { msg_id })
                 } else {
                     Err(Error::NoFreeSubscriberSlot)
                 }
@@ -254,6 +269,12 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 info!("publish");
 
                 self.publish(topic, &payload).await?;
+                Ok(ActionResponse::Ok)
+            }
+            Action::Disconnect { duration } => {
+                info!("Disconnect");
+
+                self.disconnect(duration).await?;
                 Ok(ActionResponse::Ok)
             }
         }
@@ -274,16 +295,23 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                     .await?
             }
             Packet::SubAck { header: _, sub_ack } => {
-                self.handle_sub_ack(sub_ack).await?;
+                self.handle_sub_ack(sub_ack).await?; //todo: handle error
             }
             Packet::PingReq {
                 header: _,
                 client_id,
             } => {
                 info!("PingReq {:?}", client_id);
-                let _ = self.ping_resp();
+                self.ping_resp().await?;
             }
-            _ => panic!("Unexpected message type received"),
+            Packet::Disconnect {
+                header: _,
+                duration: _,
+            } => {
+                // TODO: sleep mechanism
+                self.disconnect(None).await?;
+            }
+            _ => panic!("Can not handle received packet type."),
         }
         Ok(())
     }
@@ -318,7 +346,8 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                             .await;
                     } else {
                         info!("no free consumer slot");
-                        // TODO: unsubscribe now or not
+                        let _ = self.unsubscribe(Topic::Id(topic_id)).await;
+                        //TODO: send info message to client
                         return Err(Error::NoFreeSubscriberSlot);
                     }
                 } else {
@@ -421,6 +450,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         clean_session: bool,
     ) -> Result<(), Error> {
         info!("connect");
+
         self.check_state(State::Disconnected)?;
         let mut buf: [u8; MAX_PAYLOAD_SIZE + 32] = [0; MAX_PAYLOAD_SIZE + 32];
 
@@ -461,6 +491,23 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         Ok(())
     }
 
+    pub async fn disconnect(&mut self, duration: Option<u16>) -> Result<(), Error> {
+        info!("disconnect");
+
+        self.check_state(State::Active)?;
+
+        let mut buf: [u8; MAX_PAYLOAD_SIZE + 32] = [0; MAX_PAYLOAD_SIZE + 32];
+
+        let packet = Packet::disconnect(duration);
+        {
+            let packet_slice = packet.write_to_buf(&mut buf);
+            self.send_packet(packet_slice).await?;
+        }
+
+        self.state = State::Disconnected;
+        Ok(())
+    }
+
     pub async fn subscribe(&mut self, topic: Topic, dup: bool, qos: QoS) -> Result<u16, Error> {
         let msg_id = self.get_next_msg_id();
 
@@ -473,6 +520,21 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         let mut buf: [u8; MAX_PAYLOAD_SIZE + 32] = [0; MAX_PAYLOAD_SIZE + 32];
 
         let packet = Packet::subscribe(&topic, dup, qos, msg_id);
+
+        {
+            let packet_slice = packet.write_to_buf(&mut buf);
+            self.send_packet(packet_slice).await?;
+        }
+
+        Ok(msg_id)
+    }
+
+    pub async fn unsubscribe(&mut self, topic: Topic) -> Result<u16, Error> {
+        let msg_id = self.get_next_msg_id();
+
+        let mut buf: [u8; MAX_PAYLOAD_SIZE + 32] = [0; MAX_PAYLOAD_SIZE + 32];
+
+        let packet = Packet::unsubscribe(&topic, msg_id);
 
         {
             let packet_slice = packet.write_to_buf(&mut buf);
@@ -514,7 +576,6 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
             let packet_slice = packet.write_to_buf(&mut buf);
             self.send_packet(packet_slice).await?;
         }
-
         Ok(())
     }
 
@@ -528,7 +589,17 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
             let packet_slice = packet.write_to_buf(&mut buf);
             self.send_packet(packet_slice).await?;
         }
+        Ok(())
+    }
 
+    async fn ping_req(&mut self) -> Result<(), Error> {
+        let mut buf: [u8; MAX_PAYLOAD_SIZE + 32] = [0; MAX_PAYLOAD_SIZE + 32];
+
+        let packet = Packet::ping_req(self.client_id);
+        {
+            let packet_slice = packet.write_to_buf(&mut buf);
+            self.send_packet(packet_slice).await?;
+        }
         Ok(())
     }
 
