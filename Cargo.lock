@@ -4242,6 +4242,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mqtt-sn-home-assistant"
+version = "0.0.0"
+dependencies = [
+ "ariel-os",
+ "ariel-os-mqttsn-async",
+]
+
+[[package]]
 name = "mqtt-sn-light"
 version = "0.0.0"
 dependencies = [

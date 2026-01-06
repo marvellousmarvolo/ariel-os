@@ -6,7 +6,7 @@ pub mod settings;
 pub mod udp_nal;
 
 use crate::error::Error;
-use crate::serialization::header::{HeaderLong, HeaderShort, calculate_message_length};
+use crate::serialization::header::{HeaderLong, HeaderShort};
 use crate::{
     client::*,
     serialization::message_variable_part::{RegAck, SubAck},
@@ -200,15 +200,15 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 )
                 .await
                 {
-                    Either4::First(Ok(packet)) => {
-                        info!("Got packet. Start handling...");
-                        self.handle_packet(packet).await.unwrap();
-                    }
-                    Either4::First(Err(_)) => {
-                        info!("Got receive_packet error. Ignoring...");
-                    }
+                    Either4::First(packet_result) => match packet_result {
+                        Ok(packet) => {
+                            info!("Got packet. Start handling...");
+                            self.handle_packet(packet).await.unwrap();
+                        }
+                        Err(_) => info!("Got receive_packet error. Ignoring..."),
+                    },
                     Either4::Second(action_request) => {
-                        info!("Got action");
+                        info!("Got action. Start handling...");
                         self.handle_action_request(action_request).await.unwrap();
                     }
                     Either4::Third(_) => {
@@ -269,6 +269,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 info!("publish");
 
                 self.publish(topic, &payload).await?;
+                info!("published!");
                 Ok(ActionResponse::Ok)
             }
             Action::Disconnect { duration } => {
@@ -308,8 +309,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 header: _,
                 duration: _,
             } => {
-                // TODO: sleep mechanism
-                self.disconnect(None).await?;
+                self.state = State::Disconnected;
             }
             _ => panic!("Can not handle received packet type."),
         }

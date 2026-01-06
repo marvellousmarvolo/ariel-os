@@ -41,7 +41,8 @@ pub enum MsgType {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct HeaderLong {
     msg_type: MsgType,
-    length: u24,
+    length: u16,
+    long_flag: u8,
 }
 
 #[bitsize(16)]
@@ -63,15 +64,9 @@ impl Header {
     const LONG_FLAG: u8 = 0x01;
 
     pub fn new(msg_type: MsgType, length: u16) -> Self {
-        let length_bytes = length.to_be_bytes();
-        if length_bytes[0] == 0u8 {
-            // todo simplyfy by checking < 256?
-            Self::Short(HeaderShort::new(msg_type, length_bytes[1]))
-        } else {
-            Self::Long(HeaderLong::new(
-                msg_type,
-                u24::from_be_bytes([Self::LONG_FLAG, length_bytes[0], length_bytes[1]]),
-            ))
+        match length {
+            0..256 => Self::Short(HeaderShort::new(msg_type, length as u8)),
+            256.. => Self::Long(HeaderLong::new(msg_type, length, Self::LONG_FLAG)),
         }
     }
 
@@ -86,7 +81,7 @@ impl Header {
     pub fn length(&self) -> usize {
         match self {
             Header::Short(header_short) => header_short.length() as usize,
-            Header::Long(header_long) => header_long.length().as_usize(),
+            Header::Long(header_long) => header_long.length() as usize,
         }
     }
 
@@ -101,17 +96,15 @@ impl Header {
         let mut result: [u8; 4] = [0u8; 4];
         match self {
             Header::Long(long) => {
-                
                 debug!("long {:?}", long.value.to_be_bytes());
                 result.copy_from_slice(&long.value.to_be_bytes()[..4])
             }
             Header::Short(short) => {
-                
                 debug!("short {:?}", short.value.to_be_bytes());
                 result[..2].copy_from_slice(&short.value.to_be_bytes()[..2])
             }
         }
-        
+
         debug!("result {:?}", result);
         result
     }
@@ -132,11 +125,11 @@ impl TryFrom<u32> for Header {
     type Error = bilge::BitsError;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        if value.to_be_bytes()[0] != 1 {
-            return Err(give_me_error()); //todo Error conversion
-        }
         match HeaderLong::try_from(value) {
-            Ok(header) => Ok(Self::Long(header)),
+            Ok(header) => match header.long_flag() {
+                Self::LONG_FLAG => Ok(Self::Long(header)),
+                _ => Err(give_me_error()) //todo: Header malformed. Skip.
+            },
             Err(err) => Err(err),
         }
     }
