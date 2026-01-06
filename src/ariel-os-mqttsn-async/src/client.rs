@@ -48,8 +48,8 @@ pub enum Action {
         payload: Payload,
     },
     Disconnect {
-        duration: Option<u16>
-    }
+        duration: Option<u16>,
+    },
 }
 
 #[derive(Clone)]
@@ -204,6 +204,18 @@ impl Client {
                 response_tx: self.action_response_channel.sender(),
             })
             .await;
+        let _ = self.action_response_channel.receive().await;
+        Ok(())
+    }
+
+    pub async fn disconnect(&'static self) -> Result<(), Error> {
+        ACTION_REQUEST_CHANNEL
+            .send(ActionRequest {
+                action: Action::Disconnect { duration: None },
+                response_tx: self.action_response_channel.sender(),
+            })
+            .await;
+
         let _ = self.action_response_channel.receive().await;
         Ok(())
     }
