@@ -1,0 +1,10 @@
+{
+  "name": "Ariel OS Test LED",
+  "device_class": "switch",
+  "command_topic": "homeassistant/switch/ariel_os_led/set",
+  "icon": "mdi:alarm-light",
+  "payload_on": "1",
+  "payload_off": "0",
+  "unique_id": "led01ad",
+  "device": { "identifiers": ["01ad"], "name": "Office" }
+}

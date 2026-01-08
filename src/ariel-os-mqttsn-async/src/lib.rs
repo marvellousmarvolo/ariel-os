@@ -205,7 +205,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                             info!("Got packet. Start handling...");
                             self.handle_packet(packet).await.unwrap();
                         }
-                        Err(_) => info!("Got receive_packet error. Ignoring..."),
+                        Err(e) => info!("Got receive_packet error: {:?}", e),
                     },
                     Either4::Second(action_request) => {
                         info!("Got action. Start handling...");

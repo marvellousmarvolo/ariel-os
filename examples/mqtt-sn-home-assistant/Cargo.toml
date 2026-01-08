@@ -1,0 +1,19 @@
+[package]
+name = "mqtt-sn-home-assistant"
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+ariel-os = { path = "../../src/ariel-os", features = ["udp", "usb", "external-interrupts"] }
+ariel-os-mqttsn-async = { workspace = true, features = ["defmt"] }
+
+#[dev-dependencies]
+#embedded-test = { workspace = true }
+#
+#[[bin]]
+#name = "mqtt-sn-client"
+#harness = false
