@@ -1,13 +1,13 @@
+use ariel_os::debug::log::defmt;
 use mountain_mqtt::{
     client::{Client, ClientError},
     data::quality_of_service::QualityOfService,
     mqtt_manager::{ConnectionId, MqttOperations},
 };
 
-pub const TOPIC_BUTTON: &str = "mountain-mqtt-example-button";
+pub const TOPIC_BUTTON: &str = "embassy-example-rp2040w-button";
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, defmt::Format)]
 pub enum Action {
     Button(bool),
 }

@@ -8,17 +8,13 @@ publish = false
 workspace = true
 
 [dependencies]
-# ariel-os = { path = "../../src/ariel-os", features = ["udp", "usb", "external-interrupts", "defmt"] }
 ariel-os = { path = "../../src/ariel-os", features = ["udp", "usb", "external-interrupts"] }
 
 mountain-mqtt = { path = "./mountain-mqtt", default-features = false, features = [
   "embedded-io-async",
   "embedded-hal-async"
-  # "defmt"
 ] }
-# mountain-mqtt-embassy = { path = "./mountain-mqtt-embassy", features = ["defmt"]}
-mountain-mqtt-embassy = { path = "./mountain-mqtt-embassy"}
-
+mountain-mqtt-arielos = { path = "./mountain-mqtt-arielos"}
 
 serde = { version = "1.0.209", default-features = false, features = ["derive"] }
 serde-json-core = "0.6.0"
@@ -27,3 +23,5 @@ static_cell.workspace = true
 
 embassy-sync.workspace = true
 embassy-futures.workspace = true
+embassy-net = "0.7.1"
+heapless.workspace = true

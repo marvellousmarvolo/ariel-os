@@ -6,3 +6,5 @@ apps:
           - CONFIG_ISR_STACKSIZE=16384
     selects:
       - network
+      - wifi-cyw43
+      # - usb-ethernet

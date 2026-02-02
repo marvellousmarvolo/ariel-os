@@ -3,32 +3,25 @@ use crate::channels::{ActionSub, EventPub};
 use crate::event::{Event, TOPIC_LED};
 
 use ariel_os::{
-    asynch,
-    debug::log::*,
+    asynch::Spawner,
+    debug::log::info,
     reexports::embassy_net::{Ipv4Address, Stack},
 };
-
 use embassy_futures::select::{self, Either};
+// use embassy_net::{Ipv4Address, Stack};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     channel::{Channel, Receiver, Sender},
 };
-
 use mountain_mqtt::{
     client::{Client, ClientError, ConnectionSettings},
     data::quality_of_service::QualityOfService,
     mqtt_manager::{ConnectionId, MqttOperations},
 };
-use mountain_mqtt_embassy::mqtt_manager::{self, MqttEvent, Settings};
-
+use mountain_mqtt_arielos::mqtt_manager::{self, MqttEvent, Settings};
 use static_cell::StaticCell;
 
-pub const TOPIC_ANNOUNCE: &str = "mountain-mqtt-example-presence";
-
-static EVENT_CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, MqttAction, 32>> =
-    StaticCell::new();
-static ACTION_CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, MqttEvent<Event>, 32>> =
-    StaticCell::new();
+pub const TOPIC_ANNOUNCE: &str = "embassy-example-rp2040w-presence";
 
 #[derive(Clone)]
 pub enum MqttAction {
@@ -73,52 +66,17 @@ impl MqttOperations for MqttAction {
     }
 }
 
-pub async fn init(
-    spawner: &asynch::Spawner,
-    stack: Stack<'static>,
-    client_id: &'static str,
-    event_pub: EventPub,
-    action_sub: ActionSub,
-    host: Ipv4Address,
-    port: u16,
-) {
-    let mqtt_action_channel =
-        EVENT_CHANNEL.init(Channel::<CriticalSectionRawMutex, MqttAction, 32>::new());
-    let mqtt_event_channel =
-        ACTION_CHANNEL.init(Channel::<CriticalSectionRawMutex, MqttEvent<Event>, 32>::new());
-
-    spawner
-        .spawn(mqtt_channel_task(
-            stack,
-            client_id,
-            mqtt_event_channel.sender(),
-            mqtt_action_channel.receiver(),
-            host,
-            port,
-        ))
-        .unwrap();
-
-    spawner
-        .spawn(mqtt_task(
-            action_sub,
-            mqtt_action_channel.sender(),
-            mqtt_event_channel.receiver(),
-            event_pub,
-        ))
-        .unwrap();
-}
-
-#[ariel_os::task()]
+#[ariel_os::task]
 async fn mqtt_channel_task(
     stack: Stack<'static>,
-    client_id: &'static str,
+    uid: &'static str,
     event_sender: Sender<'static, CriticalSectionRawMutex, MqttEvent<Event>, 32>,
     action_receiver: Receiver<'static, CriticalSectionRawMutex, MqttAction, 32>,
     host: Ipv4Address,
     port: u16,
-) -> ! {
+) {
     let settings = Settings::new(host, port);
-    let connection_settings = ConnectionSettings::unauthenticated(client_id);
+    let connection_settings = ConnectionSettings::unauthenticated(uid);
 
     mqtt_manager::run::<MqttAction, Event, 16, 4096, 32>(
         stack,
@@ -130,13 +88,13 @@ async fn mqtt_channel_task(
     .await;
 }
 
-#[ariel_os::task()]
+#[ariel_os::task]
 async fn mqtt_task(
     mut actions_in: ActionSub,
     actions_out: Sender<'static, CriticalSectionRawMutex, MqttAction, 32>,
     events_in: Receiver<'static, CriticalSectionRawMutex, MqttEvent<Event>, 32>,
     events_out: EventPub,
-) -> ! {
+) {
     loop {
         let next = select::select(actions_in.next_message_pure(), events_in.receive()).await;
         match next {
@@ -161,16 +119,52 @@ async fn mqtt_task(
                         .send(MqttAction::AnnounceAndSubscribe { connection_id })
                         .await
                 }
-                MqttEvent::ConnectionStable { .. } => {
-                    info!("MQTT connection stable");
-                }
-                MqttEvent::Disconnected { .. } => {
-                    info!("MQTT disconnected");
-                }
+                MqttEvent::ConnectionStable { .. } => info!("MQTT connection stable"),
+                MqttEvent::Disconnected { .. } => info!("MQTT disconnected"),
                 event => {
                     info!("{:?}", event);
                 }
             },
         }
     }
+}
+
+static EVENT_CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, MqttAction, 32>> =
+    StaticCell::new();
+static ACTION_CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, MqttEvent<Event>, 32>> =
+    StaticCell::new();
+
+pub async fn init(
+    spawner: &Spawner,
+    stack: Stack<'static>,
+    uid: &'static str,
+    event_pub: EventPub,
+    action_sub: ActionSub,
+    host: Ipv4Address,
+    port: u16,
+) {
+    let mqtt_action_channel =
+        EVENT_CHANNEL.init(Channel::<CriticalSectionRawMutex, MqttAction, 32>::new());
+    let mqtt_event_channel =
+        ACTION_CHANNEL.init(Channel::<CriticalSectionRawMutex, MqttEvent<Event>, 32>::new());
+
+    spawner
+        .spawn(mqtt_channel_task(
+            stack,
+            uid,
+            mqtt_event_channel.sender(),
+            mqtt_action_channel.receiver(),
+            host,
+            port,
+        ))
+        .unwrap();
+
+    spawner
+        .spawn(mqtt_task(
+            action_sub,
+            mqtt_action_channel.sender(),
+            mqtt_event_channel.receiver(),
+            event_pub,
+        ))
+        .unwrap();
 }

@@ -6,17 +6,21 @@ use ariel_os::{
     debug::log::*,
     gpio::{IntEnabledInput, Output},
     reexports::embassy_time::Ticker,
-    time::{Duration, Timer},
+    time::Duration,
 };
+// use cyw43::Control;
+// use defmt::info;
+// use embassy_rp::gpio::{Input, Pull};
+// use embassy_rp::peripherals::PIN_12;
 
 #[ariel_os::task()]
 pub async fn ui_task(
     mut event_sub: EventSub,
     action_pub: ActionPub,
+    input: IntEnabledInput,
     mut led: Output,
-    button: IntEnabledInput,
-) -> ! {
-    let mut ticker = Ticker::every(Duration::from_millis(1)); // TODO: implement Ticker
+) {
+    let mut ticker = Ticker::every(Duration::from_millis(1));
     let mut debounce: u32 = 0;
     let debounce_max = 10;
     let mut pressed = false;
@@ -27,7 +31,7 @@ pub async fn ui_task(
         if let Some(message) = event_sub.try_next_message_pure() {
             info!("Event: {:?}", message);
             match message {
-                Event::Led(on) => match on {
+               Event::Led(on) => match on {
                     true => led.set_high(),
                     false => led.set_low(),
                 },
@@ -35,7 +39,7 @@ pub async fn ui_task(
             // Note: We could reply to events here by publishing to action_pub
         }
 
-        let press = if button.is_low() {
+        let press = if input.is_low() {
             debounce = debounce_max;
             if !pressed {
                 pressed = true;
@@ -69,6 +73,5 @@ pub async fn ui_task(
         }
 
         ticker.next().await;
-        // Timer::after(Duration::from_millis(1)).await;
     }
 }

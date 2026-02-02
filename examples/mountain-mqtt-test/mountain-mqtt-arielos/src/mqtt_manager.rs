@@ -1,13 +1,12 @@
-use core::cell::RefCell;
-// use embassy_net::{tcp::TcpSocket, Ipv4Address, Stack};
-// use embassy_time::{Delay, Duration, Instant, Timer};
 use ariel_os::{
-    debug::log::*,
     reexports::embassy_net::{tcp::TcpSocket, Ipv4Address, Stack},
     time::{Delay, Duration, Instant, Timer},
 };
 
-use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex};
+use ariel_os_debug::log::{info, warn};
+use core::cell::RefCell;
+// use embassy_net::{tcp::TcpSocket, Ipv4Address, Stack};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Receiver, Sender};
 
 use mountain_mqtt::client::{
@@ -44,6 +43,16 @@ impl From<ClientError> for Error {
         Self::Client(value)
     }
 }
+
+// #[cfg(feature = "defmt")]
+// impl defmt::Format for Error {
+//     fn format(&self, f: defmt::Formatter) {
+//         match self {
+//             Error::Client(client_error) => write!(f, "Client({})", client_error),
+//             Error::MqttServerUnresponsive => write!(f, "MqttServerUnresponsive"),
+//         }
+//     }
+// }
 
 /// Settings for the manager, including the address and port of the server,
 /// and the various timeouts and intervals used to manage sending pings,
@@ -175,6 +184,45 @@ pub enum MqttEvent<E> {
     /// up subscriptions again.
     NoSubscriptionExisted { connection_id: ConnectionId },
 }
+
+// #[cfg(feature = "defmt")]
+// impl<E> defmt::Format for MqttEvent<E> {
+//     fn format(&self, f: defmt::Formatter) {
+//         match self {
+//             Self::ApplicationEvent {
+//                 connection_id,
+//                 event: _,
+//             } => write!(f, "ApplicationEvent({})", connection_id),
+//             Self::Connected { connection_id } => write!(f, "Connected({})", connection_id),
+//             Self::ConnectionStable { connection_id } => {
+//                 write!(f, "ConnectionStable({})", connection_id)
+//             }
+//             Self::Disconnected {
+//                 connection_id,
+//                 error,
+//             } => write!(f, "Disconnected({}, {})", connection_id, error),
+//             Self::SubscriptionGrantedBelowMaximumQos {
+//                 connection_id,
+//                 granted_qos,
+//                 maximum_qos,
+//             } => write!(
+//                 f,
+//                 "SubscriptionGrantedBelowMaximumQos({}, granted: {}, maximum: {})",
+//                 connection_id, granted_qos, maximum_qos
+//             ),
+//             Self::PublishedMessageHadNoMatchingSubscribers { connection_id } => {
+//                 write!(
+//                     f,
+//                     "PublishedMessageHadNoMatchingSubscribers({})",
+//                     connection_id
+//                 )
+//             }
+//             Self::NoSubscriptionExisted { connection_id } => {
+//                 write!(f, "NoSubscriptionExisted({})", connection_id)
+//             }
+//         }
+//     }
+// }
 
 struct State<A> {
     /// The instant when the most recent connection event occurred, indicating
@@ -437,29 +485,12 @@ where
 ///
 /// Generally you will want to call this function as an embassy task - since it
 /// contains type parameters it can't be used directly, so you can just wrap it
-/// in another function that specifies the type parameters directly, e.g.:
+/// in another function that specifies the type parameters directly, e.g. see the
+/// example in the `embassy-example-rp2040w` crate, in the `example_mqtt_manager`
+/// module.
 ///
-/// ```
-/// #[embassy_executor::task]
-/// async fn mqtt_manager_task(
-///     stack: Stack<'static>,
-///     connection_settings: ConnectionSettings<'static>,
-///     settings: Settings,
-///     event_sender: Sender<'static, CriticalSectionRawMutex, MqttEvent<Event>, 32>,
-///     action_receiver: Receiver<'static, CriticalSectionRawMutex, MqttAction, 32>,
-/// ) -> ! {
-///     mqtt_manager::run::<MqttAction, Event, 16, 4096, 32>(
-///         stack,
-///         connection_settings,
-///         settings,
-///         event_sender,
-///         action_receiver,
-///     )
-///     .await;
-/// }
-/// ```
 pub async fn run<A, E, const P: usize, const B: usize, const Q: usize>(
-    stack: Stack<'static>,
+    stack: Stack<'_>,
     connection_settings: ConnectionSettings<'static>,
     settings: Settings,
     event_sender: Sender<'static, CriticalSectionRawMutex, MqttEvent<E>, Q>,
@@ -482,12 +513,14 @@ where
 
         let remote_endpoint = (settings.address, settings.port);
         info!("MQTT socket connecting to {:?}...", remote_endpoint);
+
         if let Err(e) = socket.connect(remote_endpoint).await {
             warn!("MQTT socket connect error, will retry: {:?}", e);
             // Wait a while to try reconnecting
             Timer::after(settings.reconnection_delay).await;
             continue;
         }
+
         info!("MQTT socket connected!");
 
         let connection = ConnectionEmbedded::new(socket);
