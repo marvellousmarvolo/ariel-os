@@ -8,8 +8,8 @@ publish = false
 workspace = true
 
 [dependencies]
-ariel-os = { path = "../../src/ariel-os", features = ["udp", "usb"] }
-ariel-os-mqttsn-async = { workspace = true, features = ["defmt"] }
+ariel-os = { path = "../../src/ariel-os", features = ["udp", "mqttsn", "defmt"] }
+ariel-os-boards = { path = "../../src/ariel-os-boards" }
 
 #[dev-dependencies]
 #embedded-test = { workspace = true }

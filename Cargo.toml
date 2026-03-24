@@ -2,9 +2,6 @@
 resolver = "3"
 members = [
   "examples/*",
-  "src/lib/rbi",
-  "src/lib/ringbuffer",
-  "src/lib/coapcore",
   "src/ariel-os",
   "src/ariel-os-alloc",
   "src/ariel-os-bench",
@@ -17,16 +14,23 @@ members = [
   "src/ariel-os-esp",
   "src/ariel-os-hal",
   "src/ariel-os-identity",
-  "src/ariel-os-mqttsn",
-  "src/ariel-os-mqttsn-async",
   "src/ariel-os-macros",
   "src/ariel-os-nrf",
   "src/ariel-os-power",
   "src/ariel-os-random",
   "src/ariel-os-rp",
   "src/ariel-os-sensors",
+  "src/ariel-os-sensors-gnss-time-ext",
+  "src/ariel-os-sensors-registry",
+  "src/ariel-os-sensors-utils",
   "src/ariel-os-stm32",
   "src/ariel-os-storage",
+  "src/lib/coapcore",
+  "src/lib/rbi",
+  "src/lib/ringbuffer",
+  "src/sensors/ariel-os-sensor-lis2du12",
+  "src/sensors/ariel-os-sensor-lps22df",
+  "src/sensors/ariel-os-sensor-stts22h",
   "tests/benchmarks/bench_sched_flags",
   "tests/benchmarks/bench_sched_yield",
   "tests/coap",
@@ -35,12 +39,17 @@ members = [
   "tests/gpio-interrupt-nrf",
   "tests/gpio-interrupt-stm32",
   "tests/i2c-controller",
+  "tests/random-getrandom",
   "tests/spi-loopback",
   "tests/spi-main",
+  "tests/stack-painting",
   "tests/threading-dynamic-prios",
+  "tests/threading-fpu",
   "tests/threading-lock",
   "tests/threading-mutex",
-  "tests/threading-fpu",
+  "tests/uart-loopback",
+  "src/ariel-os-mqttsn",
+  "src/ariel-os-mqttsn-async"
 ]
 exclude = ["src/lib", "doc"]
 default-members = ["examples/hello-world"]
@@ -92,12 +101,13 @@ embedded-io-async = { version = "0.6.1", default-features = false }
 embedded-nal-coap = "=0.1.0-alpha.5"
 embedded-storage = { version = "0.3.1" }
 embedded-storage-async = { version = "0.4.1" }
-embedded-test = { version = "0.6.1", default-features = false, features = [
+embedded-test = { version = "0.7.0", default-features = false, features = [
   "ariel-os",
 ] }
 
-esp-alloc = { version = "0.6.0", default-features = false }
-esp-hal = { version = "0.23.1", default-features = false, features = [
+esp-alloc = { version = "0.9.0", default-features = false }
+esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp-rom-sys"] }
+esp-hal = { version = "1.0.0", default-features = false, features = [
   "unstable",
 ] }
 esp-metadata-generated = { version = "0.3.0", default-features = false }
@@ -127,8 +137,6 @@ ariel-os-esp = { path = "src/ariel-os-esp" }
 ariel-os-hal = { path = "src/ariel-os-hal", default-features = false }
 ariel-os-identity = { path = "src/ariel-os-identity" }
 ariel-os-macros = { path = "src/ariel-os-macros" }
-ariel-os-mqttsn = { path = "src/ariel-os-mqttsn" }
-ariel-os-mqttsn-async = { path = "src/ariel-os-mqttsn-async" }
 ariel-os-nrf = { path = "src/ariel-os-nrf" }
 ariel-os-power = { path = "src/ariel-os-power" }
 ariel-os-random = { path = "src/ariel-os-random" }
@@ -143,6 +151,8 @@ ariel-os-stm32 = { path = "src/ariel-os-stm32" }
 ariel-os-storage = { path = "src/ariel-os-storage" }
 ariel-os-threads = { path = "src/ariel-os-threads" }
 ariel-os-utils = { path = "src/ariel-os-utils", default-features = false }
+ariel-os-mqttsn = { path = "src/ariel-os-mqttsn" }
+ariel-os-mqttsn-async = { path = "src/ariel-os-mqttsn-async" }
 
 # Built-in sensor drivers.
 ariel-os-sensor-lis2du12 = { path = "src/sensors/ariel-os-sensor-lis2du12" }
@@ -158,7 +168,7 @@ fugit = { version = "0.3.7", default-features = false }
 heapless = { version = "0.9.1", default-features = false }
 ld-memory = { version = "0.2.9" }
 log = { version = "0.4.20", default-features = false }
-once_cell = { version = "=1.19.0", default-features = false, features = [
+once_cell = { version = "1.21.3", default-features = false, features = [
   "critical-section",
 ] }
 paste = { version = "1.0" }

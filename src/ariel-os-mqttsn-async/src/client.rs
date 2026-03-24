@@ -1,10 +1,10 @@
-use crate::{T_WAIT, error::Error};
-use ariel_os::time::Timer;
-use ariel_os_debug::log::*;
+use crate::{T_RETRY, T_WAIT, error::Error, serialization::flags::QoS};
+use ariel_os_debug_log::*;
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     channel::{Channel, Sender},
 };
+use embassy_time::{TimeoutError, Timer, WithTimeout};
 use heapless::{String, Vec};
 
 pub const MAX_PAYLOAD_SIZE: usize = 1024; // !usize_from_env_or()
@@ -38,6 +38,7 @@ pub enum Action {
     Subscribe {
         topic: Topic,
         message_tx: MessageSender,
+        quality_of_service: QoS,
     },
     Register {
         topic: Topic,
@@ -46,6 +47,7 @@ pub enum Action {
     Publish {
         topic: Topic,
         payload: Payload,
+        quality_of_service: QoS,
     },
     Disconnect {
         duration: Option<u16>,
@@ -60,7 +62,6 @@ pub enum Message {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Topic {
     Id(u16),
     ShortName([u8; 2]),
@@ -101,6 +102,7 @@ impl Topic {
 }
 
 pub struct Client {
+    quality_of_service: QoS,
     action_response_channel: ActionReplyChannel,
     message_channel: MessageChannel,
 }
@@ -108,6 +110,7 @@ pub struct Client {
 impl Client {
     pub const fn new() -> Self {
         Self {
+            quality_of_service: QoS::Zero,
             action_response_channel: ActionReplyChannel::new(),
             message_channel: MessageChannel::new(),
         }
@@ -120,6 +123,7 @@ impl Client {
                     action: Action::Subscribe {
                         topic: topic.clone(),
                         message_tx: self.message_channel.sender(),
+                        quality_of_service: self.quality_of_service.clone(),
                     },
                     response_tx: self.action_response_channel.sender(),
                 })
@@ -200,6 +204,7 @@ impl Client {
                 action: Action::Publish {
                     topic,
                     payload: payload_vec,
+                    quality_of_service: self.quality_of_service
                 },
                 response_tx: self.action_response_channel.sender(),
             })

@@ -36,6 +36,7 @@ ariel-os-sensors-registry = { workspace = true, optional = true }
 ariel-os-storage = { workspace = true, optional = true }
 ariel-os-threads = { path = "../ariel-os-threads", optional = true }
 ariel-os-utils = { workspace = true }
+ariel-os-mqttsn-async = {path = "../ariel-os-mqttsn-async", optional = true}
 document-features = { workspace = true }
 linkme = { workspace = true }
 static_cell = { workspace = true }
@@ -108,6 +109,8 @@ liboscore-provide-assert = ["ariel-os-coap/liboscore-provide-assert"]
 network-config-ipv4-static = ["ariel-os-embassy/network-config-ipv4-static"]
 # Selects static IPv6 configuration.
 network-config-ipv6-static = ["ariel-os-embassy/network-config-ipv6-static"]
+# Enables MQTT-SN support
+mqttsn = ["dep:ariel-os-mqttsn-async", "udp"]
 
 #! ## Serial communication
 ## Enables I2C support.
@@ -204,6 +207,7 @@ defmt = [
   "ariel-os-embassy/defmt",
   "ariel-os-sensors?/defmt",
   "ariel-os-threads?/defmt",
+  "ariel-os-mqttsn-async?/defmt"
 ]
 # Enables logging support through `log`, see [`debug::log`].
 log = ["ariel-os-debug/log", "ariel-os-embassy/log"]

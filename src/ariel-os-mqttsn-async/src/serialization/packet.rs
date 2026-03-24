@@ -7,7 +7,7 @@ use crate::{
         packet::Error::{PacketNotRecognized, ParsingFailed},
     },
 };
-use ariel_os_debug::log::*;
+use ariel_os_debug_log::*;
 use bilge::arbitrary_int::{u40, u48};
 
 #[derive(PartialEq)]

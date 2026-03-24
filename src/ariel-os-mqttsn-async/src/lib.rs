@@ -11,14 +11,8 @@ use crate::{
     client::*,
     serialization::message_variable_part::{RegAck, SubAck},
 };
-
-use ariel_os::time::Timer;
-use ariel_os::{
-    net,
-    reexports::embassy_time::WithTimeout, // TODO: when rebased, change to ariel_os::time::with_timeout
-    time::Duration,
-    debug::log::*
-};
+use ariel_os_debug_log::*;
+use ariel_os_embassy::net;
 use ariel_os_utils::ipv4_addr_from_env;
 use bilge::Bitsized;
 use core::{
@@ -28,6 +22,7 @@ use core::{
 use embassy_futures::select::{Either4, select4};
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver};
+use embassy_time::{Duration, Timer, WithTimeout};
 use embedded_nal_async::UnconnectedUdp;
 use heapless::{LinearMap, Vec};
 use serialization::{
@@ -241,11 +236,15 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
 
     async fn handle_action(&mut self, action: Action) -> Result<ActionResponse, Error> {
         match action {
-            Action::Subscribe { topic, message_tx } => {
+            Action::Subscribe {
+                topic,
+                message_tx,
+                quality_of_service,
+            } => {
                 info!("subscribe");
                 // identify by message ID, reserve msg_id_map slot
                 if self.msg_id_map.capacity() > self.msg_id_map.len() {
-                    let msg_id = self.subscribe(topic, false, QoS::Zero).await?;
+                    let msg_id = self.subscribe(topic, false, quality_of_service).await?;
                     // always succeeds, space checked above. can ignore error.
                     let _ = self.msg_id_map.insert(msg_id, Some(message_tx));
                     Ok(ActionResponse::Subscription { msg_id })
@@ -265,10 +264,14 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                     Err(Error::NoFreeSubscriberSlot)
                 }
             }
-            Action::Publish { topic, payload } => {
+            Action::Publish {
+                topic,
+                payload,
+                quality_of_service,
+            } => {
                 info!("publish");
 
-                self.publish(topic, &payload).await?;
+                self.publish(topic, &payload, quality_of_service).await?;
                 info!("published!");
                 Ok(ActionResponse::Ok)
             }
@@ -565,12 +568,17 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         Ok(msg_id)
     }
 
-    pub async fn publish(&mut self, topic: Topic, payload: &[u8]) -> Result<(), Error> {
+    pub async fn publish(
+        &mut self,
+        topic: Topic,
+        payload: &[u8],
+        quality_of_service: QoS,
+    ) -> Result<(), Error> {
         self.check_state(State::Active)?;
 
         let mut buf: [u8; MAX_PAYLOAD_SIZE + 32] = [0; MAX_PAYLOAD_SIZE + 32];
 
-        let packet = Packet::publish(&topic, QoS::Zero, payload);
+        let packet = Packet::publish(&topic, quality_of_service, payload);
 
         {
             let packet_slice = packet.write_to_buf(&mut buf);

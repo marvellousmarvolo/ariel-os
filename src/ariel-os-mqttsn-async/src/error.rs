@@ -1,5 +1,5 @@
 #[cfg(feature = "defmt")]
-use ariel_os_debug::log::defmt;
+use ariel_os_debug_log::defmt;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]

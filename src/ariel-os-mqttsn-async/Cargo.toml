@@ -9,8 +9,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-ariel-os = { path = "../ariel-os", features = ["udp"] }
-ariel-os-debug = { workspace = true }
+ariel-os-debug-log = { workspace = true }
 ariel-os-utils = { workspace = true }
 ariel-os-embassy = { workspace = true }
 embassy-futures = { workspace = true }
@@ -20,6 +19,7 @@ embassy-net = { workspace = true, features = [
     "proto-ipv4",
     "proto-ipv6",
 ] }
+embassy-time.workspace = true
 embassy-sync.workspace = true
 embassy-executor = { workspace = true, default-features = false }
 embedded-io-async = "0.6.1"
@@ -29,9 +29,9 @@ heapless = { workspace = true }
 
 [features]
 ## Enables `defmt` as logging facade.
-defmt = ["ariel-os-debug/defmt"]
-## Enables `log` as logging facade.
-log = ["ariel-os-debug/log"]
+defmt = []
+# ## Enables `log` as logging facade.
+# log = ["ariel-os-debug/log"]
 
 #[dev-dependencies]
 #embedded-test = { workspace = true }

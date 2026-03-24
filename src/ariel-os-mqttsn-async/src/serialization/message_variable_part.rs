@@ -1,6 +1,6 @@
 use crate::serialization::flags::Flags;
 #[cfg(feature = "defmt")]
-use ariel_os_debug::log::defmt;
+use ariel_os_debug_log::defmt;
 use bilge::prelude::*;
 
 #[bitsize(8)]

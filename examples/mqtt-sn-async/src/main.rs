@@ -1,16 +1,16 @@
 #![no_main]
 #![no_std]
 
-mod pins;
 use ariel_os::{
     debug::log::*,
     gpio::{Level, Output},
+    mqttsn::{
+        client::{Client, Message, Topic},
+        settings::Settings,
+    },
     time::{Duration, Timer},
 };
-use ariel_os_mqttsn_async::{
-    client::{Client, Message, Topic},
-    settings::Settings,
-};
+use ariel_os_boards::pins;
 
 // #[ariel_os::task(autostart)]
 // async fn mqtt_sn_test1() {
@@ -106,12 +106,12 @@ use ariel_os_mqttsn_async::{
 
 #[ariel_os::task(autostart, peripherals)]
 async fn mqtt_sn_test4(peripherals: pins::LedPeripherals) {
-    let mut led = Output::new(peripherals.led, Level::High);
+    let mut led = Output::new(peripherals.led0, Level::High);
 
     static MY_CLIENT: Client = Client::new();
 
     ariel_os::asynch::spawner()
-        .spawn(ariel_os_mqttsn_async::start(Settings::default()))
+        .spawn(ariel_os::mqttsn::start(Settings::default()))
         .unwrap();
 
     info!("mqtt_sn_test4()");
