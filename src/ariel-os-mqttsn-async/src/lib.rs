@@ -17,8 +17,8 @@ use ariel_os::{
     net,
     reexports::embassy_time::WithTimeout, // TODO: when rebased, change to ariel_os::time::with_timeout
     time::Duration,
+    debug::log::*
 };
-use ariel_os_debug::log::*;
 use ariel_os_utils::ipv4_addr_from_env;
 use bilge::Bitsized;
 use core::{

@@ -176,8 +176,8 @@ pub enum MqttEvent<E> {
     /// the message later
     PublishedMessageHadNoMatchingSubscribers { connection_id: ConnectionId },
 
-    // Server processed an unsubscribe request, but no such subscription existed on the server,
-    // so nothing changed.
+    /// Server processed an unsubscribe request, but no such subscription existed on the server,
+    /// so nothing changed.
     /// This may or may not require action depending on client requirements / expectations
     /// E.g. if it was expected there would be a subscription, the client could produce
     /// an error, and the user of the client might try reconnecting to the server to set
@@ -320,7 +320,8 @@ where
     C: Client<'a>,
     A: MqttOperations + Clone,
 {
-    if let Err(e) = action
+   info!("Action arrived at handler");
+   if let Err(e) = action
         .perform(
             client,
             connection_settings.client_id(),
@@ -329,6 +330,7 @@ where
         )
         .await
     {
+        info!("error: {}", e);
         state.borrow_mut().pending_action = Some(action);
         return Err(e);
     }
@@ -507,6 +509,7 @@ where
     let mut connection_index = 0u32;
 
     loop {
+        // TODO: use embedded nal async?
         let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
 
         socket.set_timeout(None);

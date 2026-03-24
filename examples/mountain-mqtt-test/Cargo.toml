@@ -8,7 +8,7 @@ publish = false
 workspace = true
 
 [dependencies]
-ariel-os = { path = "../../src/ariel-os", features = ["udp", "usb", "external-interrupts"] }
+ariel-os = { path = "../../src/ariel-os", features = ["udp", "tcp", "usb", "external-interrupts"] }
 
 mountain-mqtt = { path = "./mountain-mqtt", default-features = false, features = [
   "embedded-io-async",

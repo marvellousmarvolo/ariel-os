@@ -2,7 +2,7 @@ use ariel_os::debug::log::defmt;
 use mountain_mqtt::{client::EventHandlerError, packets::publish::ApplicationMessage};
 use mountain_mqtt_arielos::mqtt_manager::FromApplicationMessage;
 
-pub const TOPIC_LED: &str = "embassy-example-rp2040w-led";
+pub const TOPIC_LED: &str = "embassy-example-rp2040w-button"; //"embassy-example-rp2040w-led";
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, defmt::Format)]
 pub enum Event {

@@ -2,6 +2,7 @@ use crate::action::Action;
 use crate::channels::{ActionSub, EventPub};
 use crate::event::{Event, TOPIC_LED};
 
+use ariel_os::debug::log::warn;
 use ariel_os::{
     asynch::Spawner,
     debug::log::info,
@@ -104,7 +105,10 @@ async fn mqtt_task(
                 // the MQTT connection won't work as expected
                 // If we have to drop outgoing actions, do so rather than blocking
                 if actions_out.free_capacity() > 8 {
+                    info!("Action sending!");
                     let _ = actions_out.try_send(MqttAction::Action(action));
+                } else {
+                    warn!("Action dropped!");
                 }
             }
             Either::Second(event) => match event {
@@ -112,6 +116,7 @@ async fn mqtt_task(
                     connection_id: _,
                     event,
                 } => {
+                    info!("Event received");
                     events_out.publish_immediate(event);
                 }
                 MqttEvent::Connected { connection_id } => {
@@ -143,6 +148,7 @@ pub async fn init(
     host: Ipv4Address,
     port: u16,
 ) {
+    // ???? Names reversed??
     let mqtt_action_channel =
         EVENT_CHANNEL.init(Channel::<CriticalSectionRawMutex, MqttAction, 32>::new());
     let mqtt_event_channel =
