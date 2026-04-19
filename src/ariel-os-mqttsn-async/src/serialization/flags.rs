@@ -1,9 +1,11 @@
+use ariel_os_debug_log::*;
 use bilge::prelude::*;
 
 use crate::Topic;
 
 #[bitsize(2)]
 #[derive(FromBits, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum QoS {
     /// A packet will be delivered at most once, but may not be delivered at all.
     Zero = 0b00,

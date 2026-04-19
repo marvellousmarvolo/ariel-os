@@ -1,4 +1,8 @@
-use crate::{T_RETRY, T_WAIT, error::Error, serialization::flags::QoS};
+use crate::{
+    N_RETRY, T_RETRY, T_WAIT,
+    error::Error,
+    serialization::{flags::QoS, message_variable_part::ReturnCode},
+};
 use ariel_os_debug_log::*;
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
@@ -49,6 +53,11 @@ pub enum Action {
         payload: Payload,
         quality_of_service: QoS,
     },
+    PubAck {
+        topic: Topic,
+        msg_id: u16,
+        return_code: ReturnCode,
+    },
     Disconnect {
         duration: Option<u16>,
     },
@@ -56,9 +65,48 @@ pub enum Action {
 
 #[derive(Clone)]
 pub enum Message {
-    Publish { topic: u16, payload: Payload },
-    TopicInfo { msgid: u16, topic_id: u16 },
-    Congestion,
+    Publish {
+        msg_id: u16,
+        topic: u16,
+        payload: Payload,
+    },
+    TopicInfo {
+        msg_id: u16,
+        topic: u16,
+    },
+    Congestion {
+        msg_id: u16,
+        topic: u16,
+    },
+    PubAck {
+        msg_id: u16,
+        topic: u16,
+        return_code: ReturnCode,
+    },
+}
+
+impl Message {
+    pub fn get_topic(&self) -> Topic {
+        match self {
+            Message::Publish {
+                msg_id: _, topic, ..
+            } => Topic::from_id(*topic),
+            Message::TopicInfo { msg_id: _, topic } => Topic::from_id(*topic),
+            Message::Congestion { msg_id: _, topic } => Topic::from_id(*topic),
+            Message::PubAck {
+                msg_id: _, topic, ..
+            } => Topic::from_id(*topic),
+        }
+    }
+
+    pub fn get_msg_id(&self) -> u16 {
+        match self {
+            Message::Publish { msg_id, .. } => *msg_id,
+            Message::TopicInfo { msg_id, .. } => *msg_id,
+            Message::Congestion { msg_id, .. } => *msg_id,
+            Message::PubAck { msg_id, .. } => *msg_id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -108,7 +156,15 @@ pub struct Client {
 }
 
 impl Client {
-    pub const fn new() -> Self {
+    pub const fn new(quality_of_service: QoS) -> Self {
+        Self {
+            quality_of_service,
+            action_response_channel: ActionReplyChannel::new(),
+            message_channel: MessageChannel::new(),
+        }
+    }
+
+    pub const fn default() -> Self {
         Self {
             quality_of_service: QoS::Zero,
             action_response_channel: ActionReplyChannel::new(),
@@ -135,17 +191,28 @@ impl Client {
                 info!("got subscribe result msgid: {}", msgid);
                 loop {
                     match self.receive().await {
-                        Message::TopicInfo { msgid, topic_id } => {
-                            info!("got msg_id {} -> topic_id {}", msgid, topic_id);
-                            return Ok(topic_id);
+                        Message::TopicInfo { msg_id: _, topic } => {
+                            info!("got msg_id {} -> topic_id {}", msgid, topic);
+                            return Ok(topic);
                         }
-                        Message::Publish { topic, payload: _ } => {
+                        Message::Publish {
+                            msg_id: _,
+                            topic,
+                            payload: _,
+                        } => {
                             // drop messages during subscription/registration process
                             info!("dropped message for topic_id {}", topic);
                         }
-                        Message::Congestion => {
+                        Message::Congestion { .. } => {
                             Timer::after(T_WAIT).await;
                             break;
+                        }
+                        Message::PubAck {
+                            msg_id: _,
+                            topic,
+                            return_code: _,
+                        } => {
+                            info!("dropped message for topic_id {}", topic);
                         }
                     }
                 }
@@ -173,17 +240,28 @@ impl Client {
                 info!("got registration result msgid: {}", msgid);
                 loop {
                     match self.receive().await {
-                        Message::TopicInfo { msgid, topic_id } => {
-                            info!("got msg_id {} -> topic_id {}", msgid, topic_id);
-                            return Ok(topic_id);
+                        Message::TopicInfo { msg_id: _, topic } => {
+                            info!("got msg_id {} -> topic_id {}", msgid, topic);
+                            return Ok(topic);
                         }
-                        Message::Publish { topic, payload: _ } => {
+                        Message::Publish {
+                            msg_id: _,
+                            topic,
+                            payload: _,
+                        } => {
                             // drop messages during subscription/registration process
                             info!("dropped message for topic_id {}", topic);
                         }
-                        Message::Congestion => {
+                        Message::Congestion { .. } => {
                             Timer::after(T_WAIT).await;
                             break;
+                        }
+                        Message::PubAck {
+                            msg_id: _,
+                            topic,
+                            return_code: _,
+                        } => {
+                            info!("dropped message for topic_id {}", topic);
                         }
                     }
                 }
@@ -199,17 +277,44 @@ impl Client {
         }
         let payload_vec: Vec<u8, MAX_PAYLOAD_SIZE> = Vec::from_slice(payload).unwrap();
 
-        ACTION_REQUEST_CHANNEL
-            .send(ActionRequest {
-                action: Action::Publish {
-                    topic,
-                    payload: payload_vec,
-                    quality_of_service: self.quality_of_service
-                },
-                response_tx: self.action_response_channel.sender(),
-            })
-            .await;
-        let _ = self.action_response_channel.receive().await;
+        for i in 1..=N_RETRY {
+            ACTION_REQUEST_CHANNEL
+                .send(ActionRequest {
+                    action: Action::Publish {
+                        topic: topic.clone(),
+                        payload: payload_vec.clone(),
+                        quality_of_service: self.quality_of_service.clone(),
+                    },
+                    response_tx: self.action_response_channel.sender(),
+                })
+                .await;
+
+            let _ = self.action_response_channel.receive().await;
+
+            if self.quality_of_service == QoS::One {
+                match self.message_channel.receive().with_timeout(T_RETRY).await {
+                    Ok(msg) => match msg {
+                        Message::PubAck {
+                            msg_id: _,
+                            topic,
+                            return_code: _,
+                        } => {
+                            info!("got PubAck for topic id {}", topic);
+                            return Ok(());
+                        }
+                        _ => {
+                            info!("Message is no PubAck, ignore");
+                            continue;
+                        }
+                    },
+                    Err(TimeoutError) => {
+                        info!("Publish timed out {} out of {} times.", i, N_RETRY);
+                        // todo reconnect on i = N_RETRY
+                        continue;
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -226,6 +331,22 @@ impl Client {
     }
 
     pub async fn receive(&'static self) -> Message {
-        self.message_channel.receive().await
+        let msg = self.message_channel.receive().await;
+
+        if self.quality_of_service == QoS::One {
+            ACTION_REQUEST_CHANNEL
+                .send(ActionRequest {
+                    action: Action::PubAck {
+                        topic: msg.clone().get_topic(),
+                        msg_id: msg.clone().get_msg_id(),
+                        return_code: ReturnCode::Accepted,
+                    },
+                    response_tx: self.action_response_channel.sender(),
+                })
+                .await;
+
+            let _ = self.action_response_channel.receive().await;
+        }
+        msg
     }
 }

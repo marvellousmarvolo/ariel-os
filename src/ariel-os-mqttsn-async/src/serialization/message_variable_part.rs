@@ -1,10 +1,10 @@
-use crate::serialization::flags::Flags;
+use crate::serialization::flags::{Flags, QoS};
 #[cfg(feature = "defmt")]
 use ariel_os_debug_log::defmt;
 use bilge::prelude::*;
 
 #[bitsize(8)]
-#[derive(TryFromBits, Debug, PartialEq)]
+#[derive(TryFromBits, Debug, PartialEq, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ReturnCode {
     Accepted = 0x00,
@@ -142,6 +142,10 @@ impl Publish {
     pub fn get_topic_id(&self) -> u16 {
         self.topic_id()
     }
+
+    pub fn get_msg_id(&self) -> u16 {
+        self.msg_id()
+    }
 }
 
 #[bitsize(40)]
@@ -150,6 +154,26 @@ pub struct PubAck {
     return_code: ReturnCode,
     msg_id: u16,
     topic_id: u16,
+}
+
+impl PubAck {
+    pub const SIZE: usize = 5;
+
+    pub fn to_be_bytes(&self) -> [u8; Self::SIZE] {
+        self.value.to_be_bytes()
+    }
+
+    pub fn get_topic_id(&self) -> u16 {
+        self.topic_id()
+    }
+
+    pub fn get_return_code(&self) -> ReturnCode {
+        self.return_code()
+    }
+
+    pub fn get_msg_id(&self) -> u16 {
+        self.msg_id()
+    }
 }
 
 #[bitsize(16)]
@@ -195,6 +219,10 @@ impl SubAck {
 
     pub fn get_msg_id(&self) -> u16 {
         self.msg_id()
+    }
+
+    pub fn get_qos(&self) -> QoS {
+        self.flags().qos()
     }
 }
 

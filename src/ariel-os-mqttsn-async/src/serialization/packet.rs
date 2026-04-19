@@ -3,11 +3,11 @@ use crate::{
     serialization::{
         flags::{Flags, QoS, TopicIdType},
         header::{Header, MsgType, calculate_message_length},
-        message_variable_part as mvp,
+        message_variable_part::{self as mvp, ReturnCode},
         packet::Error::{PacketNotRecognized, ParsingFailed},
     },
 };
-use ariel_os_debug_log::*;
+use ariel_os_debug_log::{defmt::export::debug, *};
 use bilge::arbitrary_int::{u40, u48};
 
 #[derive(PartialEq)]
@@ -41,6 +41,10 @@ pub enum Packet<'a> {
         header: Header,
         publish: mvp::Publish,
         data: &'a [u8],
+    },
+    PubAck {
+        header: Header,
+        pub_ack: mvp::PubAck,
     },
     Subscribe {
         header: Header,
@@ -100,7 +104,7 @@ impl Packet<'_> {
 
         let msg_type = header.msg_type();
 
-        info!("msg_type: {:?}", msg_type);
+        debug!("msg_type: {:?}", msg_type);
 
         match msg_type {
             // MsgType::Advertise => {}
@@ -160,7 +164,16 @@ impl Packet<'_> {
                     data: &bytes[mvp_size..],
                 })
             }
-            // MsgType::PubAck => {}
+            MsgType::PubAck => {
+                let mvp_size = header.size() + mvp::PubAck::SIZE;
+
+                let mvp: [u8; mvp::PubAck::SIZE] =
+                    bytes[header.size()..mvp_size].try_into().unwrap();
+
+                let pub_ack = mvp::PubAck::try_from(u40::from_be_bytes(mvp)).unwrap();
+
+                Ok(Packet::PubAck { header, pub_ack })
+            }
             // MsgType::PubComp => {}
             // MsgType::PubRec => {}
             // MsgType::PubRel => {}
@@ -198,7 +211,10 @@ impl Packet<'_> {
                     client_id: &bytes[size..],
                 })
             }
-            // MsgType::PingResp => {}
+            MsgType::PingResp => {
+                let size = header.size();
+                Ok(Packet::PingResp { header })
+            }
             MsgType::Disconnect => {
                 let size = header.size();
 
@@ -263,7 +279,9 @@ impl Packet<'_> {
             } => {
                 construct_buffer!(buf, header, publish, mvp::Publish::SIZE, data);
             }
-            // MsgType::PubAck => {}
+            Packet::PubAck { header, pub_ack } => {
+                construct_buffer!(buf, header, pub_ack, mvp::PubAck::SIZE);
+            }
             // MsgType::PubComp => {}
             // MsgType::PubRec => {}
             // MsgType::PubRel => {}
@@ -315,6 +333,7 @@ impl Packet<'_> {
             Packet::Register { header, .. } => header.msg_type(),
             Packet::RegAck { header, .. } => header.msg_type(),
             Packet::Publish { header, .. } => header.msg_type(),
+            Packet::PubAck { header, .. } => header.msg_type(),
             Packet::Subscribe { header, .. } => header.msg_type(),
             Packet::SubAck { header, .. } => header.msg_type(),
             Packet::Unsubscribe { header, .. } => header.msg_type(),
@@ -331,6 +350,7 @@ impl Packet<'_> {
             Packet::Register { header, .. } => header.length(),
             Packet::RegAck { header, .. } => header.length(),
             Packet::Publish { header, .. } => header.length(),
+            Packet::PubAck { header, .. } => header.length(),
             Packet::Subscribe { header, .. } => header.length(),
             Packet::SubAck { header, .. } => header.length(),
             Packet::Unsubscribe { header, .. } => header.length(),
@@ -436,9 +456,34 @@ impl Packet<'_> {
         }
     }
 
+    pub(crate) fn pub_ack<'a>(
+        msg_id: u16,
+        topic: &'a crate::Topic,
+        return_code: ReturnCode,
+    ) -> Packet<'a> {
+        let (_, topic_value) = match topic {
+            Topic::Id(id) => (TopicIdType::IdPredefined, id),
+            _ => panic!(),
+        };
+
+        debug!(
+            "Return Code: {:?}, MsgId: {}, Topic: {}",
+            return_code, msg_id, topic_value
+        );
+
+        let length = calculate_message_length(mvp::PubAck::SIZE);
+
+        Packet::PubAck {
+            header: Header::new(MsgType::PubAck, length),
+            pub_ack: mvp::PubAck::new(return_code, msg_id, *topic_value),
+        }
+    }
+
     pub(crate) fn ping_req<'a>(client_id: &'a [u8]) -> Packet<'a> {
+        let length = calculate_message_length(client_id.len());
+
         Packet::PingReq {
-            header: Header::new(MsgType::PingReq, 16),
+            header: Header::new(MsgType::PingReq, length),
             client_id,
         }
     }

@@ -6,6 +6,7 @@ use ariel_os::{
     gpio::{Level, Output},
     mqttsn::{
         client::{Client, Message, Topic},
+        serialization::flags::QoS,
         settings::Settings,
     },
     time::{Duration, Timer},
@@ -108,7 +109,7 @@ use ariel_os_boards::pins;
 async fn mqtt_sn_test4(peripherals: pins::LedPeripherals) {
     let mut led = Output::new(peripherals.led0, Level::High);
 
-    static MY_CLIENT: Client = Client::new();
+    static MY_CLIENT: Client = Client::new(QoS::One);
 
     ariel_os::asynch::spawner()
         .spawn(ariel_os::mqttsn::start(Settings::default()))
@@ -125,7 +126,11 @@ async fn mqtt_sn_test4(peripherals: pins::LedPeripherals) {
     loop {
         let msg = MY_CLIENT.receive().await;
         match msg {
-            Message::Publish { topic, payload } => {
+            Message::Publish {
+                msg_id: _,
+                topic,
+                payload,
+            } => {
                 if let Ok(utf8) = str::from_utf8(&payload) {
                     match utf8 {
                         "0" => {

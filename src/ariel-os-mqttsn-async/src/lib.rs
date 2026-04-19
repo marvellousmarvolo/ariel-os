@@ -27,7 +27,7 @@ use embedded_nal_async::UnconnectedUdp;
 use heapless::{LinearMap, Vec};
 use serialization::{
     flags::QoS,
-    message_variable_part::{Publish, ReturnCode},
+    message_variable_part::{PubAck, Publish, ReturnCode},
     packet::Packet,
 };
 use settings::Settings;
@@ -229,7 +229,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         } = action_request;
         let action_response = self.handle_action(action).await;
 
-        response_tx.send(action_response).await; // TODO -> Option
+        response_tx.send(action_response).await; // TODO -> Option / ActionResponse
 
         Ok(())
     }
@@ -281,6 +281,15 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 self.disconnect(duration).await?;
                 Ok(ActionResponse::Ok)
             }
+            Action::PubAck {
+                msg_id,
+                topic,
+                return_code,
+            } => {
+                info!("PubAck");
+                self.pub_ack(msg_id, topic, return_code).await?;
+                Ok(ActionResponse::Ok)
+            }
         }
     }
 
@@ -298,6 +307,11 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 self.handle_publish(&publish, Vec::from_slice(data).unwrap())
                     .await?
             }
+            Packet::PubAck { header: _, pub_ack } => {
+                info!("Received PubAck for topic {}", pub_ack.get_topic_id());
+                self.handle_pub_ack(&pub_ack).await?;
+                // match topic, send PubAck to client
+            }
             Packet::SubAck { header: _, sub_ack } => {
                 self.handle_sub_ack(sub_ack).await?; //todo: handle error
             }
@@ -307,6 +321,9 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
             } => {
                 info!("PingReq {:?}", client_id);
                 self.ping_resp().await?;
+            }
+            Packet::PingResp { header: _ } => {
+                info!("Received PingResp from gateway")
             }
             Packet::Disconnect {
                 header: _,
@@ -327,8 +344,9 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
         match return_code {
             ReturnCode::Accepted => {
                 let topic_id = sub_ack.get_topic_id();
-
                 info!("received Topic Id {:?}", topic_id);
+
+                info!("providing Quality of Service {:?}", sub_ack.get_qos());
 
                 if let Some(Some(message_tx)) = self.msg_id_map.remove(&sub_ack.get_msg_id()) {
                     if let Some((i, message_tx_list_entry)) = self
@@ -343,8 +361,9 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
 
                         message_tx
                             .send(Message::TopicInfo {
-                                msgid: sub_ack.get_msg_id(),
-                                topic_id,
+                                msg_id: sub_ack.get_msg_id(),
+                                topic: topic_id,
+                                // TODO: add QoS
                             })
                             .await;
                     } else {
@@ -358,15 +377,20 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 }
             }
             ReturnCode::RejectedCongestion => {
-                let msg_id = &sub_ack.get_msg_id();
+                let msg_id = sub_ack.get_msg_id();
                 info!(
                     "received congestion warning for message {}. Try again in {} seconds",
                     msg_id,
                     T_WAIT.as_secs()
                 );
 
-                if let Some(Some(message_tx)) = self.msg_id_map.remove(msg_id) {
-                    message_tx.send(Message::Congestion).await;
+                if let Some(Some(message_tx)) = self.msg_id_map.remove(&msg_id) {
+                    message_tx
+                        .send(Message::Congestion {
+                            msg_id: msg_id,
+                            topic: sub_ack.get_topic_id(),
+                        })
+                        .await;
                 } else {
                     info!("No return channel for received msg_id. Ignore SubAck");
                 }
@@ -391,8 +415,8 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 if let Some(Some(message_tx)) = self.msg_id_map.remove(&reg_ack.get_msg_id()) {
                     message_tx
                         .send(Message::TopicInfo {
-                            msgid: reg_ack.get_msg_id(),
-                            topic_id,
+                            msg_id: reg_ack.get_msg_id(),
+                            topic: topic_id,
                         })
                         .await;
                 } else {
@@ -400,15 +424,20 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 }
             }
             ReturnCode::RejectedCongestion => {
-                let msg_id = &reg_ack.get_msg_id();
+                let msg_id = reg_ack.get_msg_id();
                 info!(
                     "received congestion warning for message {}. Try again in {} seconds",
                     msg_id,
                     T_WAIT.as_secs()
                 );
 
-                if let Some(Some(message_tx)) = self.msg_id_map.remove(msg_id) {
-                    message_tx.send(Message::Congestion).await;
+                if let Some(Some(message_tx)) = self.msg_id_map.remove(&msg_id) {
+                    message_tx
+                        .send(Message::Congestion {
+                            msg_id: msg_id,
+                            topic: reg_ack.get_topic_id(),
+                        })
+                        .await;
                 } else {
                     info!("No return channel for received msg_id. Ignore RegAck");
                 }
@@ -434,12 +463,38 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 let channel = self.message_tx_list[channel_id].as_ref().unwrap();
                 let _ = channel
                     .send(Message::Publish {
+                        msg_id: publish.get_msg_id(),
                         topic: *topic,
                         payload: data.clone(),
                     })
                     .await;
                 let bit = 1 << channel_id;
                 channel_bitmap = channel_bitmap & !bit;
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_pub_ack(&mut self, pub_ack: &PubAck) -> Result<(), Error> {
+        let topic_id = pub_ack.get_topic_id();
+
+        info!("pub_ack topic={}", topic_id);
+
+        for (topic, channel_bitmap) in self.topic_map.iter().filter(|(key, _)| **key == topic_id) {
+            // TODO: explain channel bitmap
+            let mut channel_bitmap = *channel_bitmap;
+            while channel_bitmap.leading_zeros() < 16 {
+                let channel_id = channel_bitmap.trailing_zeros() as usize;
+                let channel = self.message_tx_list[channel_id].as_ref().unwrap();
+                let _ = channel
+                    .send(Message::PubAck {
+                        msg_id: pub_ack.get_msg_id(),
+                        topic: *topic,
+                        return_code: pub_ack.get_return_code(),
+                    })
+                    .await;
+                let bit = 1 << channel_id;
+                channel_bitmap = channel_bitmap & !bit; //-> clearbit()
             }
         }
         Ok(())
@@ -582,6 +637,27 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
 
         {
             let packet_slice = packet.write_to_buf(&mut buf);
+            self.send_packet(packet_slice).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn pub_ack(
+        &mut self,
+        msg_id: u16,
+        topic: Topic,
+        return_code: ReturnCode,
+    ) -> Result<(), Error> {
+        self.check_state(State::Active)?;
+
+        // fixed packet size
+        let mut buf: [u8; 56] = [0; 56];
+
+        let packet = Packet::pub_ack(msg_id, &topic, return_code);
+
+        {
+            let packet_slice = packet.write_to_buf(&mut buf);
+            debug!("PubAck Bytes: {:?}", packet_slice);
             self.send_packet(packet_slice).await?;
         }
         Ok(())
