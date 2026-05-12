@@ -4750,7 +4750,7 @@ name = "mqtt-sn-performance-test"
 version = "0.0.0"
 dependencies = [
  "ariel-os",
- "ariel-os-mqttsn-async",
+ "ariel-os-boards",
 ]
 
 [[package]]

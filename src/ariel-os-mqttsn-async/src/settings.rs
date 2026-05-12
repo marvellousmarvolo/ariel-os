@@ -38,11 +38,13 @@ impl<'a> SettingsBuilder<'a> {
         self.settings
     }
 
-    pub fn client_id(&mut self, client_id: &'a str) {
+    pub fn client_id(&mut self, client_id: &'a str) -> &mut Self {
         self.settings.client_id = client_id.as_bytes();
+        self
     }
 
-    pub fn keepalive(&mut self, keepalive: u16) {
+    pub fn keepalive(&mut self, keepalive: u16) -> &mut Self {
         self.settings.keepalive = keepalive;
+        self
     }
 }

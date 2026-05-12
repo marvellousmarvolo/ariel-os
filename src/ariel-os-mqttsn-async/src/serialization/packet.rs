@@ -7,7 +7,7 @@ use crate::{
         packet::Error::{PacketNotRecognized, ParsingFailed},
     },
 };
-use ariel_os_debug_log::{defmt::export::debug, *};
+use ariel_os_debug_log::*;
 use bilge::arbitrary_int::{u40, u48};
 
 #[derive(PartialEq)]
@@ -31,7 +31,7 @@ pub enum Packet<'a> {
     Register {
         header: Header,
         register: mvp::Register,
-        topic: &'a Topic,
+        topic: Topic,
     },
     RegAck {
         header: Header,
@@ -96,15 +96,11 @@ pub enum Error {
 
 impl Packet<'_> {
     pub fn try_from(bytes: &[u8]) -> Result<Packet<'_>, Error> {
-        debug!("bytes: {:?}", bytes);
 
         let header = Header::try_from(bytes).unwrap();
-
-        debug!("header: {:?}", header);
-
         let msg_type = header.msg_type();
 
-        debug!("msg_type: {:?}", msg_type);
+        debug!("receive data: msg_type {:?}, bytes {:?}", msg_type, bytes);
 
         match msg_type {
             // MsgType::Advertise => {}
@@ -128,7 +124,26 @@ impl Packet<'_> {
             // MsgType::WillTopic => {}
             // MsgType::WillMsgReq => {}
             // MsgType::WillMsg => {}
-            // MsgType::Register => {}
+            MsgType::Register => {
+                let mvp_size = header.size() + mvp::Register::SIZE;
+
+                let mvp: [u8; mvp::Register::SIZE] = match bytes[header.size()..mvp_size].try_into()
+                {
+                    Ok(it) => it,
+                    Err(_) => return Err(ParsingFailed),
+                };
+
+                let register = match mvp::Register::try_from(u32::from_be_bytes(mvp)) {
+                    Ok(it) => it,
+                    Err(_) => return Err(ParsingFailed),
+                };
+
+                Ok(Packet::Register {
+                    header,
+                    register,
+                    topic: Topic::from_long(str::from_utf8(&bytes[mvp_size..]).unwrap()),
+                })
+            }
             MsgType::RegAck => {
                 let mvp_size = header.size() + mvp::RegAck::SIZE;
 
@@ -320,7 +335,7 @@ impl Packet<'_> {
             // MsgType::WillMsgEsp => {}
             // MsgType::Encapsulated => {}
             _ => {
-                info!("Packet not recognized");
+                error!("Packet not recognized");
             }
         }
         &buf[..self.length()]
@@ -428,20 +443,25 @@ impl Packet<'_> {
         }
     }
 
-    pub(crate) fn register<'a>(topic: &'a crate::Topic, msg_id: u16) -> Packet<'a> {
+    pub(crate) fn register<'a>(topic: crate::Topic, msg_id: u16) -> Packet<'a> {
         let msg_len = calculate_message_length(topic.len() + mvp::Register::SIZE);
 
         Packet::Register {
             header: Header::new(MsgType::Register, msg_len),
             register: mvp::Register::new(msg_id, 0x0000u16), // topic_id is irrelevant on client
-            topic: &topic,
+            topic: topic,
         }
     }
 
-    pub(crate) fn publish<'a>(topic: &'a crate::Topic, qos: QoS, payload: &'a [u8]) -> Packet<'a> {
+    pub(crate) fn publish<'a>(
+        msg_id: u16,
+        topic: &'a crate::Topic,
+        qos: QoS,
+        payload: &'a [u8],
+    ) -> Packet<'a> {
         let (topic_id_type, topic_value) = match topic {
             Topic::ShortName(name) => (TopicIdType::ShortName, &u16::from_be_bytes(*name)),
-            Topic::Id(id) => (TopicIdType::IdPredefined, id),
+            Topic::Id(id) => (TopicIdType::IdNormal, id),
             Topic::LongName(_) => panic!(),
         };
 
@@ -451,7 +471,7 @@ impl Packet<'_> {
 
         Packet::Publish {
             header: Header::new(MsgType::Publish, length),
-            publish: mvp::Publish::new(0x0000u16, *topic_value, flags), // msg_id 0x0000 on QoS 0 & -1
+            publish: mvp::Publish::new(msg_id, *topic_value, flags), // msg_id can be 0x0000 on QoS 0 & -1
             data: payload,
         }
     }
@@ -462,7 +482,7 @@ impl Packet<'_> {
         return_code: ReturnCode,
     ) -> Packet<'a> {
         let (_, topic_value) = match topic {
-            Topic::Id(id) => (TopicIdType::IdPredefined, id),
+            Topic::Id(id) => (TopicIdType::IdNormal, id),
             _ => panic!(),
         };
 

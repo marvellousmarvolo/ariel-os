@@ -8,7 +8,7 @@ use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     channel::{Channel, Sender},
 };
-use embassy_time::{TimeoutError, Timer, WithTimeout};
+use embassy_time::{Duration, TimeoutError, Timer, WithTimeout};
 use heapless::{String, Vec};
 
 pub const MAX_PAYLOAD_SIZE: usize = 1024; // !usize_from_env_or()
@@ -61,6 +61,7 @@ pub enum Action {
     Disconnect {
         duration: Option<u16>,
     },
+    Timeout {},
 }
 
 #[derive(Clone)]
@@ -188,32 +189,18 @@ impl Client {
             if let ActionResponse::Subscription { msg_id: msgid } =
                 self.action_response_channel.receive().await?
             {
-                info!("got subscribe result msgid: {}", msgid);
                 loop {
-                    match self.receive().await {
+                    match self.message_channel.receive().await {
                         Message::TopicInfo { msg_id: _, topic } => {
-                            info!("got msg_id {} -> topic_id {}", msgid, topic);
+                            debug!("Subscription: got msg_id {} -> topic_id {}", msgid, topic);
                             return Ok(topic);
                         }
-                        Message::Publish {
-                            msg_id: _,
-                            topic,
-                            payload: _,
-                        } => {
-                            // drop messages during subscription/registration process
-                            info!("dropped message for topic_id {}", topic);
-                        }
                         Message::Congestion { .. } => {
+                            warn!("Congestion occuring, waiting for subscription result...");
                             Timer::after(T_WAIT).await;
                             break;
                         }
-                        Message::PubAck {
-                            msg_id: _,
-                            topic,
-                            return_code: _,
-                        } => {
-                            info!("dropped message for topic_id {}", topic);
-                        }
+                        _ => info!("dropped message"),
                     }
                 }
             } else {
@@ -237,32 +224,18 @@ impl Client {
             if let ActionResponse::Registration { msg_id: msgid } =
                 self.action_response_channel.receive().await?
             {
-                info!("got registration result msgid: {}", msgid);
                 loop {
-                    match self.receive().await {
+                    match self.message_channel.receive().await {
                         Message::TopicInfo { msg_id: _, topic } => {
-                            info!("got msg_id {} -> topic_id {}", msgid, topic);
+                            debug!("Registration: got msg_id {} -> topic_id {}", msgid, topic);
                             return Ok(topic);
                         }
-                        Message::Publish {
-                            msg_id: _,
-                            topic,
-                            payload: _,
-                        } => {
-                            // drop messages during subscription/registration process
-                            info!("dropped message for topic_id {}", topic);
-                        }
                         Message::Congestion { .. } => {
+                            warn!("Congestion occuring, waiting for registration result...");
                             Timer::after(T_WAIT).await;
-                            break;
+                            continue;
                         }
-                        Message::PubAck {
-                            msg_id: _,
-                            topic,
-                            return_code: _,
-                        } => {
-                            info!("dropped message for topic_id {}", topic);
-                        }
+                        _ => warn!("dropped message"),
                     }
                 }
             } else {
@@ -277,43 +250,53 @@ impl Client {
         }
         let payload_vec: Vec<u8, MAX_PAYLOAD_SIZE> = Vec::from_slice(payload).unwrap();
 
-        for i in 1..=N_RETRY {
+        'outer: loop {
+            for i in 1..=N_RETRY {
+                ACTION_REQUEST_CHANNEL
+                    .send(ActionRequest {
+                        action: Action::Publish {
+                            topic: topic.clone(),
+                            payload: payload_vec.clone(),
+                            quality_of_service: self.quality_of_service.clone(),
+                        },
+                        response_tx: self.action_response_channel.sender(),
+                    })
+                    .await;
+
+                let _ = self.action_response_channel.receive().await;
+
+                if self.quality_of_service == QoS::One {
+                    match self.message_channel.receive().with_timeout(T_RETRY).await {
+                        Ok(msg) => match msg {
+                            Message::PubAck {
+                                msg_id: _,
+                                topic,
+                                return_code: _,
+                            } => {
+                                info!("got PubAck for topic id {}", topic);
+                                return Ok(());
+                            }
+                            _ => {
+                                info!("Message is no PubAck, ignore");
+                                continue;
+                            }
+                        },
+                        Err(TimeoutError) => {
+                            warn!("Publish timed out {} out of {} times.", i, N_RETRY);
+                            continue;
+                        }
+                    }
+                } else {
+                    break 'outer;
+                }
+            }
             ACTION_REQUEST_CHANNEL
                 .send(ActionRequest {
-                    action: Action::Publish {
-                        topic: topic.clone(),
-                        payload: payload_vec.clone(),
-                        quality_of_service: self.quality_of_service.clone(),
-                    },
+                    action: Action::Timeout {},
                     response_tx: self.action_response_channel.sender(),
                 })
                 .await;
-
             let _ = self.action_response_channel.receive().await;
-
-            if self.quality_of_service == QoS::One {
-                match self.message_channel.receive().with_timeout(T_RETRY).await {
-                    Ok(msg) => match msg {
-                        Message::PubAck {
-                            msg_id: _,
-                            topic,
-                            return_code: _,
-                        } => {
-                            info!("got PubAck for topic id {}", topic);
-                            return Ok(());
-                        }
-                        _ => {
-                            info!("Message is no PubAck, ignore");
-                            continue;
-                        }
-                    },
-                    Err(TimeoutError) => {
-                        info!("Publish timed out {} out of {} times.", i, N_RETRY);
-                        // todo reconnect on i = N_RETRY
-                        continue;
-                    }
-                }
-            }
         }
         Ok(())
     }
