@@ -51,13 +51,13 @@ async fn mqtt_sn_performance_sender(peripherals: pins::Peripherals) {
         let _ = btn.wait_for_low().await;
         info!("Start!");
 
-        let t_start = Instant::now().as_millis();
+        let t_start = Instant::now().as_micros();
         let payload = t_start.to_be_bytes();
         let _ = CLIENT_SEND
             .publish(Topic::from_id(topic_id_send), &payload)
             .await;
         let msg = CLIENT_RECV.receive().await;
-        let t_roundtrip = Instant::now().as_millis() - t_start;
+        let t_roundtrip = Instant::now().as_micros() - t_start;
         info!("Iteration {}", loop_count);
         match msg {
             Message::Publish {
@@ -66,13 +66,13 @@ async fn mqtt_sn_performance_sender(peripherals: pins::Peripherals) {
                 payload,
             } => {
                 let t_delta = u64::from_be_bytes(payload.into_array().unwrap());
-                info!("  One-way took {} milliseconds", t_delta);
+                info!("  One-way took {} µs", t_delta);
             }
             _ => {
                 info!("  MESSAGE UNEXPECTED");
             }
         }
-        info!("  Roundtrip took {} milliseconds", t_roundtrip);
+        info!("  Roundtrip took {} µs", t_roundtrip);
         loop_count += 1;
         Timer::after_secs(1).await;
     }
@@ -115,11 +115,11 @@ async fn mqtt_sn_performance_sender(peripherals: pins::Peripherals) {
 //         pin.wait_for_low().await;
 //         info!("Start!");
 
-//         let t_local = Instant::now().as_millis();
+//         let t_local = Instant::now().as_micros();
 //         let msg = CLIENT_RECV.receive().await;
-//         let t_delta = Instant::now().as_millis() - t_local;
+//         let t_delta = Instant::now().as_micros() - t_local;
 //         info!("Iteration {}", loop_count);
-//         info!("  One-way took {} milliseconds", t_delta);
+//         info!("  One-way took {} µs", t_delta);
 //         match msg {
 //             Message::Publish {
 //                 msg_id: _,
