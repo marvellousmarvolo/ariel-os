@@ -41,7 +41,6 @@ subdirs:
   - usb-keyboard
   - usb-serial
   - embedded-nal-async-example
-  - mountain-mqtt-test
   - mqtt-sn-async
   - mqtt-sn-example
   - mqtt-sn-client
@@ -49,5 +48,6 @@ subdirs:
   - mqtt-sn-light
   - mqtt-sn-home-assistant
   - mqtt-sn-performance-test
+  - mqtt-performance-test
   - async-interop
   - async-interop-zero-copy
