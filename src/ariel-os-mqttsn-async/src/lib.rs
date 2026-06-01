@@ -3,7 +3,6 @@ pub mod client;
 pub mod error;
 pub mod serialization;
 pub mod settings;
-pub mod udp_nal;
 
 use crate::error::Error;
 use crate::serialization::header::{HeaderLong, HeaderShort};
@@ -61,10 +60,10 @@ trait MqttPacketReceive {
     async fn receive_packet<'b>(&mut self, buf: &'b mut [u8]) -> Result<Packet<'b>, Error>;
 }
 
-impl MqttPacketReceive for udp_nal::UnconnectedUdp<'_> {
+impl MqttPacketReceive for UdpSocket<'_> {
     async fn receive_packet<'b>(&mut self, buf: &'b mut [u8]) -> Result<Packet<'b>, Error> {
-        match self.receive_into(buf).await {
-            Ok((n, _, _)) => {
+        match self.recv_from(buf).await {
+            Ok((n, _)) => {
                 debug!("Received Packet Bytes: {:?}", &buf[..n]);
                 match Packet::try_from(&buf[..n]) {
                     Ok(packet) => Ok(packet),
@@ -100,7 +99,7 @@ impl RegisterSubscriber for TopicMap {
 pub async fn start(settings: Settings<'static>) {
     let stack = net::network_stack().await.unwrap();
     stack.wait_config_up().await;
-    let local = "0.0.0.0:1234".parse().unwrap();
+    let local_port = 1234;
     let remote_ip = ipv4_addr_from_env!("MQTT_BROKER_ADDR", "static IPv4 MQTT broker address");
     let remote = SocketAddr::new(IpAddr::V4(remote_ip), 1884);
 
@@ -109,7 +108,7 @@ pub async fn start(settings: Settings<'static>) {
     let mut tx_meta = [PacketMetadata::EMPTY; 16];
     let mut tx_buffer = [0; 4096];
 
-    let socket = UdpSocket::new(
+    let mut socket = UdpSocket::new(
         stack,
         &mut rx_meta,
         &mut rx_buffer,
@@ -117,16 +116,24 @@ pub async fn start(settings: Settings<'static>) {
         &mut tx_buffer,
     );
 
-    let socket = udp_nal::UnconnectedUdp::bind_multiple(socket, local)
-        .await
-        .unwrap();
+    if let Err(e) = socket.bind(local_port) {
+        info!("Bind error: {:?}", e);
+    }
+
+    // let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+    // socket.set_nagle_enabled(false);
+    // socket.set_timeout(None);
+    // if let Err(e) = socket.connect(remote_endpoint).await {
+    //     warn!("MQTT socket connect error, will retry: {:?}", e);
+    //     // Wait a while to try reconnecting
+    //     Timer::after(settings.reconnection_delay).await;
+    // }
 
     let mut connection = MqttsnConnection {
         client_id: settings.client_id(),
         msg_id: 1,
         stack,
         socket,
-        local,
         remote,
         action_rx: ACTION_REQUEST_CHANNEL.receiver(),
         state: State::Disconnected,
@@ -144,9 +151,8 @@ pub struct MqttsnConnection<'a, 'ch> {
     client_id: &'a [u8],
     stack: net::NetworkStack,
     state: State,
-    local: SocketAddr,
     remote: SocketAddr,
-    socket: udp_nal::UnconnectedUdp<'a>,
+    socket: UdpSocket<'a>,
     action_rx: Receiver<'a, CriticalSectionRawMutex, ActionRequest<'ch>, 1>,
     msg_id: u16,
     topic_map: TopicMap,
@@ -166,13 +172,13 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
                 {
                     match e {
                         Error::Timeout => {
-                            info!("TIMEOUT ERROR");
+                            error!("TIMEOUT ERROR");
                         }
                         Error::TransmissionFailed => {
-                            info!("TRANSMISSION ERROR");
+                            error!("TRANSMISSION ERROR");
                         }
                         _ => {
-                            info!("OTHER ERROR");
+                            error!("OTHER ERROR");
                         }
                     }
                 }
@@ -735,7 +741,7 @@ impl<'a, 'ch> MqttsnConnection<'a, 'ch> {
     }
 
     async fn send_packet(&mut self, buf: &[u8]) -> Result<(), Error> {
-        match self.socket.send(self.local, self.remote, &buf).await {
+        match self.socket.send_to(&buf, self.remote).await {
             Ok(_) => Ok(()),
             Err(_) => Err(Error::TransmissionFailed),
         }
