@@ -13,9 +13,9 @@ ariel-os-debug-log = { workspace = true }
 ariel-os-utils = { workspace = true }
 ariel-os-embassy = { workspace = true }
 embassy-futures = { workspace = true }
-embedded-nal-async = "0.8"
 embassy-net = { workspace = true, features = [
     "udp",
+    "tcp",
     "proto-ipv4",
     "proto-ipv6",
 ] }
