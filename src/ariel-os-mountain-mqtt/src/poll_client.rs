@@ -1,4 +1,4 @@
-use ariel_os_debug::log::{debug, warn, trace};
+use ariel_os_debug_log::{debug, trace, warn};
 use core::{future, net::Ipv4Addr};
 
 use crate::{
@@ -6,7 +6,6 @@ use crate::{
     packet_bin::{self, PacketBin},
     packet_bin_client::PacketBinClient,
 };
-use ariel_os::time::{Duration, Instant, Timer};
 use embassy_futures::select::{select3, Either3};
 use embassy_net::{
     tcp::{ConnectError, TcpSocket},
@@ -16,6 +15,7 @@ use embassy_sync::{
     blocking_mutex::raw::RawMutex,
     channel::{Channel, Receiver, Sender},
 };
+use embassy_time::{Duration, Instant, Timer};
 use embedded_io_async::Write;
 use heapless::Vec;
 use mountain_mqtt::{
@@ -124,6 +124,7 @@ where
 
     let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
 
+    socket.set_nagle_enabled(false); // available from v0.8.0
     socket.set_timeout(None);
 
     let remote_endpoint = (settings.address, settings.port);
@@ -154,7 +155,7 @@ where
             // Ignore packets with length 0 - we can use these as a way to flush
             // the buffer.
             if write.len > 0 {
-                if let Err(e) = tx.write_all(write.msg_data()).await {
+                if let Err(e) = tx.write(write.msg_data()).await {
                     return e;
                 }
             }

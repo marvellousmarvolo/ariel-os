@@ -1,9 +1,6 @@
-use ariel_os::{
-    // reexports::embassy_net::{tcp::TcpSocket, Ipv4Address, Stack},
-    time::{Delay, Duration, Instant, Timer},
-};
+use embassy_time::{Delay, Duration, Instant, Timer};
 
-use ariel_os_debug::log::{info, warn};
+use ariel_os_debug_log::{info, warn};
 use core::cell::RefCell;
 use embassy_net::{tcp::TcpSocket, Ipv4Address, Stack};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -320,8 +317,8 @@ where
     C: Client<'a>,
     A: MqttOperations + Clone,
 {
-   info!("Action arrived at handler");
-   if let Err(e) = action
+    info!("Action arrived at handler");
+    if let Err(e) = action
         .perform(
             client,
             connection_settings.client_id(),
@@ -509,10 +506,9 @@ where
     let mut connection_index = 0u32;
 
     loop {
-        // TODO: use embedded nal async?
         let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-        
-        socket.set_nagle_enabled(false);
+
+        socket.set_nagle_enabled(false); // available from v0.8.0
         socket.set_timeout(None);
 
         let remote_endpoint = (settings.address, settings.port);

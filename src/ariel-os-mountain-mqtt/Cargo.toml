@@ -1,5 +1,5 @@
 [package]
-name = "mountain-mqtt-arielos"
+name = "ariel-os-mountain-mqtt"
 version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -14,14 +14,15 @@ categories = [
 description = "A no_std compatible, async MQTT v5 client for arielos, using mountain-mqtt"
 
 [dependencies]
+ariel-os-debug-log = { workspace = true }
+ariel-os-utils = { workspace = true }
+ariel-os-embassy = { workspace = true }
 
-ariel-os = { path = "../../../src/ariel-os", features = ["tcp", "usb", "time"] }
-ariel-os-debug.workspace = true
 embassy-sync.workspace = true
 
-heapless.workspace = true
-
-embassy-net = { version = "0.7.0", features = [
+heapless = { workspace = true }
+embassy-time = { workspace = true }
+embassy-net = { version = "0.8.0", features = [
   "tcp",
   "udp",
   "raw",
@@ -30,27 +31,26 @@ embassy-net = { version = "0.7.0", features = [
   "dns",
 ] }
 
-embassy-futures = { version = "0.1.1" }
+embassy-futures = { workspace = true }
 
-defmt = { version = "1.0", optional = true }
+defmt = { workspace = true, optional = true }
 
-log = { version = "0.4", optional = true }
+log = { workspace = true, optional = true }
 
-embedded-io-async = { version = "0.6.1" }
+embedded-io-async = { version = "0.7.0" }
 
-mountain-mqtt = { version = "0.2.0", path = "../mountain-mqtt", default-features = false, features = [
+mountain-mqtt = { workspace = true, default-features = false, features = [
   "embedded-io-async",
   "embedded-hal-async",
 ] }
 
 [features]
-default = ["defmt"]
 
 defmt = [
   "dep:defmt",
   "embassy-net/defmt",
   "embassy-sync/defmt",
-  "embedded-io-async/defmt-03",
+  "embedded-io-async/defmt",
   "mountain-mqtt/defmt",
 ]
 

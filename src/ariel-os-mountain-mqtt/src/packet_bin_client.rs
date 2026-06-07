@@ -1,8 +1,8 @@
-use ariel_os::{reexports::embassy_time::WithTimeout, time::Duration};
 use embassy_sync::{
     blocking_mutex::raw::RawMutex,
     channel::{Receiver, Sender},
 };
+use embassy_time::{Duration, WithTimeout};
 use mountain_mqtt::{
     client::ClientError,
     codec::{

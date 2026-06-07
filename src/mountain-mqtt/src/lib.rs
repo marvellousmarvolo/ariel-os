@@ -1,4 +1,4 @@
-#![cfg_attr(not(feature = "std"), no_std)]
+#![no_std]
 
 pub mod client;
 pub mod client_state;
@@ -8,9 +8,6 @@ pub mod error;
 pub mod mqtt_manager;
 pub mod packet_client;
 pub mod packets;
-
-#[cfg(feature = "tokio")]
-pub mod tokio;
 
 #[cfg(feature = "embedded-io-async")]
 pub mod embedded_io_async;

@@ -40,6 +40,12 @@ pub use ariel_os_identity as identity;
 #[cfg(feature = "mqttsn")]
 #[doc(inline)]
 pub use ariel_os_mqttsn_async as mqttsn;
+#[cfg(feature = "mqtt")]
+#[doc(inline)]
+pub use ariel_os_mountain_mqtt as mqtt;
+#[cfg(feature = "mountain-mqtt")]
+#[doc(inline)]
+pub use mountain_mqtt;
 #[doc(inline)]
 pub use ariel_os_power as power;
 #[cfg(feature = "random")]

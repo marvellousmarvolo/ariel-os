@@ -20,8 +20,6 @@ use ariel_os::{
     asynch::Spawner,
     debug::log::*,
     gpio::{Input, Level, Output, Pull},
-    // net,
-    // reexports::embassy_net::{Ipv4Address, Stack},
     time::{Duration, Timer},
 };
 use embassy_net::Ipv4Address;

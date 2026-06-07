@@ -49,7 +49,9 @@ members = [
   "tests/threading-mutex",
   "tests/uart-loopback",
   "src/ariel-os-mqttsn",
-  "src/ariel-os-mqttsn-async"
+  "src/ariel-os-mqttsn-async",
+  "src/mountain-mqtt",
+  "src/ariel-os-mountain-mqtt",
 ]
 exclude = ["src/lib", "doc"]
 default-members = ["examples/hello-world"]
@@ -153,6 +155,8 @@ ariel-os-threads = { path = "src/ariel-os-threads" }
 ariel-os-utils = { path = "src/ariel-os-utils", default-features = false }
 ariel-os-mqttsn = { path = "src/ariel-os-mqttsn" }
 ariel-os-mqttsn-async = { path = "src/ariel-os-mqttsn-async" }
+mountain-mqtt = { path ="src/mountain-mqtt", default-features = false}
+ariel-os-mountain-mqtt = { path ="src/ariel-os-mountain-mqtt"}
 
 # Built-in sensor drivers.
 ariel-os-sensor-lis2du12 = { path = "src/sensors/ariel-os-sensor-lis2du12" }

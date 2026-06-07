@@ -1,6 +1,8 @@
-use ariel_os::debug::log::defmt;
-use mountain_mqtt::{client::EventHandlerError, packets::publish::ApplicationMessage};
-use mountain_mqtt_arielos::mqtt_manager::FromApplicationMessage;
+use ariel_os::{
+    debug::log::defmt,
+    mountain_mqtt::{client::EventHandlerError, packets::publish::ApplicationMessage},
+    mqtt::mqtt_manager::FromApplicationMessage,
+};
 
 pub const TOPIC_RECV: &str = "perf_a"; // send
 // pub const TOPIC_RECV: &str = "perf_b"; // recv

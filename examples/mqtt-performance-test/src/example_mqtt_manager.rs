@@ -2,12 +2,17 @@ use crate::action::Action;
 use crate::channels::{ActionSub, EventPub};
 use crate::event::{Event, TOPIC_RECV};
 
-use ariel_os::debug::log::warn;
 use ariel_os::{
     asynch::SendSpawner,
     debug::log::info,
+    debug::log::warn,
+    mountain_mqtt::{
+        client::{Client, ClientError, ConnectionSettings},
+        data::quality_of_service::QualityOfService,
+        mqtt_manager::{ConnectionId, MqttOperations},
+    },
+    mqtt::mqtt_manager::{self, MqttEvent, Settings},
     net,
-    // reexports::embassy_net::{Ipv4Address, Stack},
 };
 use embassy_futures::select::{self, Either};
 use embassy_net::Ipv4Address;
@@ -15,15 +20,9 @@ use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     channel::{Channel, Receiver, Sender},
 };
-use mountain_mqtt::{
-    client::{Client, ClientError, ConnectionSettings},
-    data::quality_of_service::QualityOfService,
-    mqtt_manager::{ConnectionId, MqttOperations},
-};
-use mountain_mqtt_arielos::mqtt_manager::{self, MqttEvent, Settings};
 use static_cell::StaticCell;
 
-pub const TOPIC_ANNOUNCE: &str = "embassy-example-rp2040w-presence";
+pub const TOPIC_ANNOUNCE: &str = "ariel-os-example-presence";
 
 #[derive(Clone)]
 pub enum MqttAction {

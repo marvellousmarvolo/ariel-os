@@ -1,11 +1,10 @@
 use ariel_os::{
     debug::log::*,
-    // time::{Duration, Instant, Timer},
-};
-use mountain_mqtt::{
-    client::{Client, ClientError},
-    data::quality_of_service::QualityOfService,
-    mqtt_manager::{ConnectionId, MqttOperations},
+    mountain_mqtt::{
+        client::{Client, ClientError},
+        data::quality_of_service::QualityOfService,
+        mqtt_manager::{ConnectionId, MqttOperations},
+    },
 };
 
 pub const TOPIC_SEND: &str = "perf_b"; // send
