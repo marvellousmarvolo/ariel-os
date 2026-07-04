@@ -4,7 +4,7 @@ use crate::event::Event;
 
 use ariel_os::{
     debug::log::*,
-    gpio::{IntEnabledInput, Output},
+    gpio::IntEnabledInput,
     time::{Duration, Instant, Timer},
 };
 
@@ -12,9 +12,10 @@ use ariel_os::{
 pub async fn ui_task(mut event_sub: EventSub, action_pub: ActionPub, mut pin: IntEnabledInput) {
     let mut loop_count = 0;
 
+    info!("Wait for start signal...");
+
     loop {
-        info!("Wait for start signal...");
-        pin.wait_for_low().await;
+        pin.wait_for_any_edge().await;
         info!("Start!");
 
         let t_local = Instant::now().as_micros();
@@ -37,4 +38,5 @@ pub async fn ui_task(mut event_sub: EventSub, action_pub: ActionPub, mut pin: In
         loop_count += 1;
         Timer::after_secs(1).await;
     }
+    info!("BENCHMARK DONE");
 }

@@ -1,5 +1,5 @@
 apps:
-  - name: mqtt-performance-test
+  - name: mqtt-performance-test-receiver
     env:
       global:
         CARGO_ENV:

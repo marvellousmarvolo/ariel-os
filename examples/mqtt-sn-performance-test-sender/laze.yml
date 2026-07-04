@@ -1,5 +1,5 @@
 apps:
-  - name: mqtt-sn-performance-test
+  - name: mqtt-sn-performance-test-sender
     env:
       global:
         CARGO_ENV:
@@ -8,3 +8,5 @@ apps:
       - network
       # - has_leds
       # - has_buttons
+    context:
+      - nrf5340-app

@@ -7,14 +7,12 @@ mod channels;
 mod event;
 mod example_mqtt_manager;
 mod pins;
-mod ui_send;
-// mod ui_recv;
+mod ui;
 
 use crate::action::Action;
 use crate::channels::{ActionChannel, EventChannel};
 use crate::event::Event;
-use crate::ui_send::ui_task;
-// use crate::ui_recv::ui_task;
+use crate::ui::ui_task;
 
 use ariel_os::{
     asynch::Spawner,
@@ -35,14 +33,7 @@ static ACTION_CHANNEL: StaticCell<ActionChannel> = StaticCell::new();
 #[ariel_os::task(autostart, peripherals)]
 async fn main(peripherals: pins::Peripherals) {
     // Init peripherals
-
-    let mut btn = Input::builder(peripherals.btn1, Pull::Up)
-        .build_with_interrupt()
-        .unwrap();
-
-    let mut pin = Input::builder(peripherals.signal_pin, Pull::Up)
-        .build_with_interrupt()
-        .unwrap();
+    let mut pin = Output::builder(peripherals.signal_pin, Level::High).build();
 
     let event_channel =
         EVENT_CHANNEL.init(PubSubChannel::<CriticalSectionRawMutex, Event, 16, 4, 2>::new());
@@ -59,19 +50,10 @@ async fn main(peripherals: pins::Peripherals) {
 
     let spawner = ariel_os::asynch::spawner();
 
-    spawner
-        .spawn(ui_task(event_sub_ui, action_pub_ui, btn))
-        .unwrap();
     let client_id: &str = "ariel_0";
-
-    // spawner
-    //     .spawn(ui_task(event_sub_ui, action_pub_ui, pin))
-    //     .unwrap();
-    // let client_id: &str = "ariel_1";
-
+    
     example_mqtt_manager::init(
         &spawner,
-        // stack<'static>,
         &client_id,
         event_pub_mqtt,
         action_sub,
@@ -79,6 +61,10 @@ async fn main(peripherals: pins::Peripherals) {
         port,
     )
     .await;
+
+    spawner
+        .spawn(ui_task(event_sub_ui, action_pub_ui, pin, 1000))
+        .unwrap();
 
     loop {
         Timer::after(Duration::from_secs(5)).await;

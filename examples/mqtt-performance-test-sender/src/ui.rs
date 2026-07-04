@@ -4,19 +4,24 @@ use crate::event::Event;
 
 use ariel_os::{
     debug::log::*,
-    gpio::{IntEnabledInput, Output},
+    gpio::Output,
     time::{Duration, Instant, Timer},
 };
 
 #[ariel_os::task()]
-pub async fn ui_task(mut event_sub: EventSub, action_pub: ActionPub, mut btn: IntEnabledInput) {
-    let mut loop_count = 0;
+pub async fn ui_task(
+    mut event_sub: EventSub,
+    action_pub: ActionPub,
+    mut pin: Output,
+    max_iterations: usize,
+) {
+    let max_iterations = 1000;
 
-    loop {
-        info!("Press Button to start testing!");
+    info!("20 seconds to start...");
+    Timer::after_secs(20).await;
 
-        let _ = btn.wait_for_low().await;
-
+    for i in 0..max_iterations {
+        pin.toggle();
         info!("Start!");
 
         let t_start = Instant::now().as_micros();
@@ -29,7 +34,7 @@ pub async fn ui_task(mut event_sub: EventSub, action_pub: ActionPub, mut btn: In
         let msg = event_sub.next_message_pure().await;
         let t_roundtrip = Instant::now().as_micros() - t_start;
 
-        info!("Iteration {}", loop_count);
+        info!("Iteration {}", i);
         match msg {
             Event::Message(payload) => {
                 info!("  One-way took {} µs", payload);
@@ -39,7 +44,7 @@ pub async fn ui_task(mut event_sub: EventSub, action_pub: ActionPub, mut btn: In
             }
         }
         info!("  Roundtrip took {} µs", t_roundtrip);
-        loop_count += 1;
         Timer::after_secs(1).await;
     }
+    info!("BENCHMARK DONE");
 }

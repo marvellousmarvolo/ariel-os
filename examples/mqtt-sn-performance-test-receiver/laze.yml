@@ -1,0 +1,12 @@
+apps:
+  - name: mqtt-sn-performance-test-receiver
+    env:
+      global:
+        CARGO_ENV:
+          - CONFIG_ISR_STACKSIZE=16384
+    selects:
+      - network
+      # - has_leds
+      # - has_buttons
+    context:
+      - nrf5340-app

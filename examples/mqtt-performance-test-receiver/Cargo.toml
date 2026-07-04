@@ -1,0 +1,21 @@
+[package]
+name = "mqtt-performance-test-receiver"
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+ariel-os = { path = "../../src/ariel-os", features = ["udp", "tcp", "usb", "external-interrupts", "mqtt", "mountain-mqtt"] }
+
+serde = { version = "1.0.209", default-features = false, features = ["derive"] }
+serde-json-core = "0.6.0"
+
+static_cell.workspace = true
+
+embassy-sync.workspace = true
+embassy-futures.workspace = true
+embassy-net.workspace = true
+heapless.workspace = true

@@ -202,7 +202,7 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
                 {
                     Either4::First(packet_result) => match packet_result {
                         Ok(packet) => {
-                            info!("Got packet. Start handling...");
+                            debug!("Got packet. Start handling...");
                             self.handle_packet(packet).await.unwrap();
                         }
                         Err(e) => error!("Got receive_packet error: {:?}", e),
@@ -290,7 +290,7 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
                 topic,
                 return_code,
             } => {
-                debug!("Send PubAck for msg_id {} on topic {:?}", msg_id, topic);
+                debug!("Send PubAck for msg_id {}", msg_id);
                 self.pub_ack(msg_id, topic, return_code).await?;
                 Ok(ActionResponse::Ok)
             }
@@ -498,7 +498,17 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
 
         // send PubAck w/ return code Rejected if topic_id is not found
 
-        for (topic, channel_bitmap) in self.topic_map.iter().filter(|(key, _)| **key == topic_id) {
+        let mut it = self
+            .topic_map
+            .iter()
+            .filter(|(key, _)| **key == topic_id)
+            .peekable();
+
+        if it.peek().is_none() {
+            error!("Topic in message not found in Topic Map!")
+        }
+
+        for (topic, channel_bitmap) in it {
             // TODO: explain channel bitmap
             let mut channel_bitmap = *channel_bitmap;
             while channel_bitmap.leading_zeros() < 16 {
@@ -686,7 +696,7 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
 
         {
             let packet_slice = packet.write_to_buf(&mut buf);
-            info!("Publish Bytes: {:?}", packet_slice);
+            trace!("Publish Bytes: {:?}", packet_slice);
             self.send_packet(packet_slice).await?;
         }
         Ok(())
@@ -707,7 +717,7 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
 
         {
             let packet_slice = packet.write_to_buf(&mut buf);
-            info!("PubAck Bytes: {:?}", packet_slice);
+            debug!("PubAck Bytes: {:?}", packet_slice);
             self.send_packet(packet_slice).await?;
         }
         Ok(())

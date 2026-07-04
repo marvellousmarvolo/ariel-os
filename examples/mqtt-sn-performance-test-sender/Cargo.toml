@@ -1,5 +1,5 @@
 [package]
-name = "mqtt-sn-performance-test"
+name = "mqtt-sn-performance-test-sender"
 license.workspace = true
 edition.workspace = true
 publish = false

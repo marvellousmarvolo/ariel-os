@@ -4,8 +4,7 @@ use ariel_os::{
     mqtt::mqtt_manager::FromApplicationMessage,
 };
 
-pub const TOPIC_RECV: &str = "perf_a"; // send
-// pub const TOPIC_RECV: &str = "perf_b"; // recv
+pub const TOPIC_RECV: &str = "perf_b";
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, defmt::Format)]
 pub enum Event {

@@ -1,5 +1,5 @@
 [package]
-name = "mqtt-performance-test"
+name = "mqtt-performance-test-sender"
 license.workspace = true
 edition.workspace = true
 publish = false
@@ -9,12 +9,6 @@ workspace = true
 
 [dependencies]
 ariel-os = { path = "../../src/ariel-os", features = ["udp", "tcp", "usb", "external-interrupts", "mqtt", "mountain-mqtt"] }
-
-# mountain-mqtt = { path = "./mountain-mqtt", default-features = false, features = [
-#   "embedded-io-async",
-#   "embedded-hal-async"
-# ] }
-# mountain-mqtt-arielos = { path = "./mountain-mqtt-arielos"}
 
 serde = { version = "1.0.209", default-features = false, features = ["derive"] }
 serde-json-core = "0.6.0"

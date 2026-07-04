@@ -22,7 +22,7 @@ use embassy_sync::{
 };
 use static_cell::StaticCell;
 
-pub const TOPIC_ANNOUNCE: &str = "ariel-os-example-presence";
+pub const TOPIC_ANNOUNCE: &str = "embassy-example-rp2040w-presence";
 
 #[derive(Clone)]
 pub enum MqttAction {

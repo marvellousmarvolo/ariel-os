@@ -47,7 +47,9 @@ subdirs:
   - mqtt-sn-button
   - mqtt-sn-light
   - mqtt-sn-home-assistant
-  - mqtt-sn-performance-test
-  - mqtt-performance-test
+  - mqtt-sn-performance-test-sender
+  - mqtt-sn-performance-test-receiver
+  - mqtt-performance-test-sender
+  - mqtt-performance-test-receiver
   - async-interop
   - async-interop-zero-copy

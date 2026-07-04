@@ -7,8 +7,7 @@ use ariel_os::{
     },
 };
 
-pub const TOPIC_SEND: &str = "perf_b"; // send
-// pub const TOPIC_SEND: &str = "perf_a"; // recv
+pub const TOPIC_SEND: &str = "perf_a";
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, defmt::Format)]
 pub enum Action {
@@ -32,7 +31,7 @@ impl MqttOperations for Action {
                     .publish(
                         TOPIC_SEND,
                         &timestamp.to_be_bytes(),
-                        QualityOfService::Qos0,
+                        QualityOfService::Qos1,
                         false,
                     )
                     .await?;
