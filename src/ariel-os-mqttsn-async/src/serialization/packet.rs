@@ -1,11 +1,11 @@
 use crate::{
-    Topic,
     serialization::{
         flags::{Flags, QoS, TopicIdType},
         header::{Header, MsgType, calculate_message_length},
         message_variable_part::{self as mvp, ReturnCode},
         packet::Error::{PacketNotRecognized, ParsingFailed},
     },
+    topic::{TopicFilter, TopicId},
 };
 use ariel_os_debug_log::*;
 use bilge::arbitrary_int::{u40, u48};
@@ -31,7 +31,7 @@ pub enum Packet<'a> {
     Register {
         header: Header,
         register: mvp::Register,
-        topic: Topic,
+        topic_name: &'a str,
     },
     RegAck {
         header: Header,
@@ -49,7 +49,7 @@ pub enum Packet<'a> {
     Subscribe {
         header: Header,
         subscribe: mvp::Subscribe,
-        topic: &'a Topic,
+        topic: &'a TopicFilter,
     },
     SubAck {
         header: Header,
@@ -58,7 +58,7 @@ pub enum Packet<'a> {
     Unsubscribe {
         header: Header,
         unsubscribe: mvp::Unsubscribe,
-        topic: &'a Topic,
+        topic: &'a TopicFilter,
     },
     PingReq {
         header: Header,
@@ -95,8 +95,8 @@ pub enum Error {
 }
 
 impl Packet<'_> {
+    /// Try to create a `Packet` from raw bytes
     pub fn try_from(bytes: &[u8]) -> Result<Packet<'_>, Error> {
-
         let header = Header::try_from(bytes).unwrap();
         let msg_type = header.msg_type();
 
@@ -138,10 +138,12 @@ impl Packet<'_> {
                     Err(_) => return Err(ParsingFailed),
                 };
 
+                let topic_name = str::from_utf8(&bytes[mvp_size..]).map_err(|_| ParsingFailed)?;
+
                 Ok(Packet::Register {
                     header,
                     register,
-                    topic: Topic::from_long(str::from_utf8(&bytes[mvp_size..]).unwrap()),
+                    topic_name,
                 })
             }
             MsgType::RegAck => {
@@ -227,7 +229,6 @@ impl Packet<'_> {
                 })
             }
             MsgType::PingResp => {
-                let size = header.size();
                 Ok(Packet::PingResp { header })
             }
             MsgType::Disconnect => {
@@ -281,10 +282,10 @@ impl Packet<'_> {
             Packet::Register {
                 header,
                 register,
-                topic,
+                topic_name,
             } => {
                 let written = construct_buffer!(buf, header, register, mvp::Register::SIZE);
-                topic.to_buf(&mut buf[written..]);
+                buf[written..written + topic_name.len()].copy_from_slice(topic_name.as_bytes());
             }
             // MsgType::RegAck => {}
             Packet::Publish {
@@ -309,7 +310,14 @@ impl Packet<'_> {
                 topic.to_buf(&mut buf[written..]);
             }
             // MsgType::SubAck => {} // no send
-            // MsgType::Unsubscribe => {}
+            Packet::Unsubscribe {
+                header,
+                unsubscribe,
+                topic,
+            } => {
+                let written = construct_buffer!(buf, header, unsubscribe, mvp::Unsubscribe::SIZE);
+                topic.to_buf(&mut buf[written..]);
+            }
             // MsgType::UnsubAck => {}
             Packet::PingReq { header, client_id } => {
                 buf[..header.size()].copy_from_slice(&header.to_be_bytes()[..header.size()]);
@@ -376,7 +384,7 @@ impl Packet<'_> {
     }
 }
 
-// packet creation methods
+// Construction methods for `Packet`
 impl Packet<'_> {
     pub(crate) fn connect(
         keep_alive: u16,
@@ -384,7 +392,6 @@ impl Packet<'_> {
         will: bool,
         client_id: &[u8],
     ) -> Packet<'_> {
-        // build "connect" packet
         let flags = Flags::new(
             TopicIdType::IdNormal,
             clean_session,
@@ -416,86 +423,67 @@ impl Packet<'_> {
         }
     }
 
-    pub(crate) fn subscribe<'a>(
-        topic: &'a crate::Topic,
-        dup: bool,
-        qos: QoS,
-        msg_id: u16,
-    ) -> Packet<'a> {
+    pub(crate) fn subscribe(topic: &TopicFilter, dup: bool, qos: QoS, msg_id: u16) -> Packet<'_> {
         let flags = Flags::new(topic.into(), true, false, false, qos, dup);
         let msg_len = calculate_message_length(topic.len() + mvp::Subscribe::SIZE);
 
         Packet::Subscribe {
             header: Header::new(MsgType::Subscribe, msg_len),
             subscribe: mvp::Subscribe::new(msg_id, flags),
-            topic: &topic,
+            topic,
         }
     }
 
-    pub(crate) fn unsubscribe<'a>(topic: &'a crate::Topic, msg_id: u16) -> Packet<'a> {
+    pub(crate) fn unsubscribe(topic: &TopicFilter, msg_id: u16) -> Packet<'_> {
         let flags = Flags::new(topic.into(), false, false, false, QoS::Zero, false);
         let msg_len = calculate_message_length(topic.len() + mvp::Unsubscribe::SIZE);
 
         Packet::Unsubscribe {
-            header: Header::new(MsgType::Subscribe, msg_len),
+            header: Header::new(MsgType::Unsubscribe, msg_len),
             unsubscribe: mvp::Unsubscribe::new(msg_id, flags),
-            topic: &topic,
+            topic,
         }
     }
 
-    pub(crate) fn register<'a>(topic: crate::Topic, msg_id: u16) -> Packet<'a> {
-        let msg_len = calculate_message_length(topic.len() + mvp::Register::SIZE);
+    pub(crate) fn register(topic_name: &str, msg_id: u16) -> Packet<'_> {
+        let msg_len = calculate_message_length(topic_name.len() + mvp::Register::SIZE);
 
         Packet::Register {
             header: Header::new(MsgType::Register, msg_len),
             register: mvp::Register::new(msg_id, 0x0000u16), // topic_id is irrelevant on client
-            topic: topic,
+            topic_name,
         }
     }
 
     pub(crate) fn publish<'a>(
         msg_id: u16,
-        topic: &'a crate::Topic,
+        topic: TopicId,
         qos: QoS,
         payload: &'a [u8],
     ) -> Packet<'a> {
-        let (topic_id_type, topic_value) = match topic {
-            Topic::ShortName(name) => (TopicIdType::ShortName, &u16::from_be_bytes(*name)),
-            Topic::Id(id) => (TopicIdType::IdNormal, id),
-            Topic::LongName(_) => panic!(),
-        };
-
-        let flags = Flags::new(topic_id_type, false, false, false, qos, false);
+        let flags = Flags::new((&topic).into(), false, false, false, qos, false);
 
         let length = calculate_message_length(payload.len() + mvp::Publish::SIZE);
 
         Packet::Publish {
             header: Header::new(MsgType::Publish, length),
-            publish: mvp::Publish::new(msg_id, *topic_value, flags), // msg_id can be 0x0000 on QoS 0 & -1
+            publish: mvp::Publish::new(msg_id, topic.value(), flags), // msg_id can be 0x0000 on QoS 0 & -1
             data: payload,
         }
     }
 
-    pub(crate) fn pub_ack<'a>(
-        msg_id: u16,
-        topic: &'a crate::Topic,
-        return_code: ReturnCode,
-    ) -> Packet<'a> {
-        let (_, topic_value) = match topic {
-            Topic::Id(id) => (TopicIdType::IdNormal, id),
-            _ => panic!(),
-        };
-
+    pub(crate) fn pub_ack<'a>(msg_id: u16, topic: TopicId, return_code: ReturnCode) -> Packet<'a> {
         debug!(
-            "Return Code: {:?}, MsgId: {}, Topic: {}",
-            return_code, msg_id, topic_value
+            "Return Code: {:?}, MsgId: {}, Topic: {:?}",
+            return_code, msg_id, topic
         );
 
         let length = calculate_message_length(mvp::PubAck::SIZE);
 
+        // PUBACK carries no flags, the gateway matches the topic through the msg_id.
         Packet::PubAck {
             header: Header::new(MsgType::PubAck, length),
-            pub_ack: mvp::PubAck::new(return_code, msg_id, *topic_value),
+            pub_ack: mvp::PubAck::new(return_code, msg_id, topic.value()),
         }
     }
 

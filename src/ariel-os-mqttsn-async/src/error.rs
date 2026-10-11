@@ -13,6 +13,7 @@ pub enum Error {
     InvalidIdType,
     NoFreeSubscriberSlot,
     PayloadTooBig,
+    TopicTooLong,
     SocketNotBound,
     ConnectError
 }

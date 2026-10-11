@@ -5,7 +5,7 @@ use ariel_os::{
     debug::log::*,
     gpio::{Level, Output},
     mqttsn::{
-        client::{Client, Message, Topic},
+        client::{Client, Message},
         serialization::flags::QoS,
         settings::Settings,
     },
@@ -83,79 +83,80 @@ use ariel_os_boards::pins;
 //     }
 // }
 
-// #[ariel_os::task(autostart)]
-// async fn mqtt_sn_test3() {
-//     static MY_CLIENT: Client = Client::new();
-
-//     info!("mqtt_sn_test3()");
-
-//     let topic_id = MY_CLIENT
-//         .register(Topic::from_long("my_topic"))
-//         .await
-//         .unwrap();
-//     info!("publish topic_id: {}", topic_id);
-
-//     loop {
-//         info!("Publish iteration");
-//         let payload = b"Test Message";
-//         let _ = MY_CLIENT.publish(Topic::from_id(topic_id), payload).await;
-//         Timer::after(Duration::from_millis(1000)).await;
-//     }
-
-//     // info!("mqtt_sn_test() end");
-// }
-
-#[ariel_os::task(autostart, peripherals)]
-async fn mqtt_sn_test4(peripherals: pins::LedPeripherals) {
-    let mut led = Output::new(peripherals.led0, Level::High);
-
+#[ariel_os::task(autostart)]
+async fn mqtt_sn_test3() {
     static MY_CLIENT: Client = Client::new(QoS::One);
 
     ariel_os::asynch::spawner()
         .spawn(ariel_os::mqttsn::start(Settings::default()))
         .unwrap();
 
-    info!("mqtt_sn_test4()");
+    info!("mqtt_sn_test3()");
 
-    let topic_id = MY_CLIENT
-        .subscribe(Topic::from_long("my_topic"))
-        .await
-        .unwrap();
-    info!("topic_id: {}", topic_id);
+    let topic_id = MY_CLIENT.register("my_topic_3").await.unwrap();
+    info!("publish topic_id: {:?}", topic_id);
 
     loop {
-        let msg = MY_CLIENT.receive().await;
-        match msg {
-            Message::Publish {
-                msg_id: _,
-                topic,
-                payload,
-            } => {
-                if let Ok(utf8) = str::from_utf8(&payload) {
-                    match utf8 {
-                        "0" => {
-                            led.set_high();
-                            info!("LED turned off");
-                        }
-                        "1" => {
-                            led.set_low();
-                            info!("LED turned on");
-                        }
-                        _ => {
-                            info!("invalid LED command");
-                            continue;
-                        }
-                    }
-                } else {
-                    info!("got message for topic_id {} (non-utf8)", topic);
-                }
-            }
-            _ => {
-                info!("MESSAGE UNEXPECTED");
-            }
-        }
+        info!("Publish iteration");
+        let payload = b"Test Message";
+        let _ = MY_CLIENT.publish(topic_id, payload).await;
+        Timer::after(Duration::from_millis(1000)).await;
     }
+
+    // info!("mqtt_sn_test() end");
 }
+
+// #[ariel_os::task(autostart, peripherals)]
+// async fn mqtt_sn_test4(peripherals: pins::LedPeripherals) {
+//     let mut led = Output::new(peripherals.led0, Level::High);
+
+//     static MY_CLIENT: Client = Client::new(QoS::One);
+
+//     ariel_os::asynch::spawner()
+//         .spawn(ariel_os::mqttsn::start(Settings::default()))
+//         .unwrap();
+
+//     info!("mqtt_sn_test4()");
+
+//     let topic_id = MY_CLIENT
+//         .subscribe(Topic::from_long("my_topic"))
+//         .await
+//         .unwrap();
+//     info!("topic_id: {}", topic_id);
+
+//     loop {
+//         let msg = MY_CLIENT.receive().await;
+//         match msg {
+//             Message::Publish {
+//                 msg_id: _,
+//                 topic,
+//                 payload,
+//             } => {
+//                 if let Ok(utf8) = str::from_utf8(&payload) {
+//                     match utf8 {
+//                         "0" => {
+//                             led.set_high();
+//                             info!("LED turned off");
+//                         }
+//                         "1" => {
+//                             led.set_low();
+//                             info!("LED turned on");
+//                         }
+//                         _ => {
+//                             info!("invalid LED command");
+//                             continue;
+//                         }
+//                     }
+//                 } else {
+//                     info!("got message for topic_id {} (non-utf8)", topic);
+//                 }
+//             }
+//             _ => {
+//                 info!("MESSAGE UNEXPECTED");
+//             }
+//         }
+//     }
+// }
 
 // #[ariel_os::task(autostart)]
 // async fn mqtt_sn_counter() {

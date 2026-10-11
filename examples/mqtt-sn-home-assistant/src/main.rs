@@ -9,8 +9,9 @@ use ariel_os::{
     time::{Duration, Timer},
 };
 use ariel_os_mqttsn_async::{
-    client::{Client, Message, Topic},
+    client::{Client, Message},
     settings::Settings,
+    topic::TopicFilter,
 };
 
 #[ariel_os::task(autostart, peripherals)]
@@ -31,10 +32,10 @@ async fn mqtt_sn_home_assistant(peripherals: pins::Peripherals) {
     info!("mqtt_sn_home_assistant()");
 
     let command_topic = COMMAND_CLIENT
-        .subscribe(Topic::from_long("homeassistant/switch/ariel_os_led/set"))
+        .subscribe(TopicFilter::name("homeassistant/switch/ariel_os_led/set").unwrap())
         .await
         .unwrap();
-    info!("command_topic: {}", command_topic);
+    info!("command_topic: {:?}", command_topic);
 
     loop {
         let msg = COMMAND_CLIENT.receive().await;
@@ -56,7 +57,7 @@ async fn mqtt_sn_home_assistant(peripherals: pins::Peripherals) {
                         }
                     }
                 } else {
-                    info!("got message for topic_id {} (non-utf8)", topic);
+                    info!("got message for topic_id {:?} (non-utf8)", topic);
                 }
             }
             _ => {
@@ -71,10 +72,10 @@ async fn discovery(mut btn: IntEnabledInput) {
     static DISCOVERY_CLIENT: Client = Client::new();
 
     let discovery_topic_id = DISCOVERY_CLIENT
-        .register(Topic::from_long("homeassistant/switch/ariel_os_led/config"))
+        .register("homeassistant/switch/ariel_os_led/config")
         .await
         .unwrap();
-    info!("discovery_topic: {}", discovery_topic_id);
+    info!("discovery_topic: {:?}", discovery_topic_id);
 
     let mut is_discovered = false;
 
@@ -91,10 +92,7 @@ async fn discovery(mut btn: IntEnabledInput) {
         info!("discovery message: {:?}", discovery_payload);
 
         match DISCOVERY_CLIENT
-            .publish(
-                Topic::from_id(discovery_topic_id),
-                discovery_payload.as_bytes(),
-            )
+            .publish(discovery_topic_id, discovery_payload.as_bytes())
             .await
         {
             Ok(_) => info!("Discovery packet sent"),

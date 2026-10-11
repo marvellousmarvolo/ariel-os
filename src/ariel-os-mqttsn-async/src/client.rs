@@ -2,13 +2,14 @@ use crate::{
     N_RETRY, T_RETRY, T_WAIT,
     error::Error,
     serialization::{flags::QoS, message_variable_part::ReturnCode},
+    topic::{TopicFilter, TopicId},
 };
 use ariel_os_debug_log::*;
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     channel::{Channel, Sender},
 };
-use embassy_time::{Duration, TimeoutError, Timer, WithTimeout};
+use embassy_time::{TimeoutError, Timer, WithTimeout};
 use heapless::{String, Vec};
 
 pub const MAX_PAYLOAD_SIZE: usize = 1024; // !usize_from_env_or()
@@ -40,21 +41,21 @@ pub enum ActionResponse {
 #[derive(Clone)]
 pub enum Action {
     Subscribe {
-        topic: Topic,
+        topic: TopicFilter,
         message_tx: MessageSender,
         quality_of_service: QoS,
     },
     Register {
-        topic: Topic,
+        topic_name: String<MAX_TOPIC_LENGTH>,
         message_tx: MessageSender,
     },
     Publish {
-        topic: Topic,
+        topic: TopicId,
         payload: Payload,
         quality_of_service: QoS,
     },
     PubAck {
-        topic: Topic,
+        topic: TopicId,
         msg_id: u16,
         return_code: ReturnCode,
     },
@@ -68,35 +69,30 @@ pub enum Action {
 pub enum Message {
     Publish {
         msg_id: u16,
-        topic: u16,
+        topic: TopicId,
         payload: Payload,
     },
     TopicInfo {
         msg_id: u16,
-        topic: u16,
+        topic: TopicId,
     },
     Congestion {
         msg_id: u16,
-        topic: u16,
     },
     PubAck {
         msg_id: u16,
-        topic: u16,
+        topic: TopicId,
         return_code: ReturnCode,
     },
 }
 
 impl Message {
-    pub fn get_topic(&self) -> Topic {
+    pub fn get_topic(&self) -> Option<TopicId> {
         match self {
-            Message::Publish {
-                msg_id: _, topic, ..
-            } => Topic::from_id(*topic),
-            Message::TopicInfo { msg_id: _, topic } => Topic::from_id(*topic),
-            Message::Congestion { msg_id: _, topic } => Topic::from_id(*topic),
-            Message::PubAck {
-                msg_id: _, topic, ..
-            } => Topic::from_id(*topic),
+            Message::Publish { topic, .. } => Some(*topic),
+            Message::TopicInfo { topic, .. } => Some(*topic),
+            Message::PubAck { topic, .. } => Some(*topic),
+            Message::Congestion { .. } => None,
         }
     }
 
@@ -106,46 +102,6 @@ impl Message {
             Message::TopicInfo { msg_id, .. } => *msg_id,
             Message::Congestion { msg_id, .. } => *msg_id,
             Message::PubAck { msg_id, .. } => *msg_id,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Topic {
-    Id(u16),
-    ShortName([u8; 2]),
-    LongName(String<MAX_TOPIC_LENGTH>),
-}
-
-impl Topic {
-    pub fn from_short(short_name: [u8; 2]) -> Topic {
-        Self::ShortName(short_name)
-    }
-
-    pub fn from_id(id: u16) -> Topic {
-        Self::Id(id)
-    }
-
-    pub fn from_long(long_name: &str) -> Topic {
-        // TODO: make fallible
-        Self::LongName(String::try_from(long_name).unwrap())
-    }
-
-    pub fn len(&self) -> usize {
-        match self {
-            Self::Id(_id) => 2,
-            Self::ShortName(_short_name) => 2,
-            Self::LongName(long_name) => long_name.len(),
-        }
-    }
-
-    pub fn to_buf(&self, buf: &mut [u8]) {
-        match self {
-            Self::Id(id) => buf[..2].copy_from_slice(&id.to_be_bytes()),
-            Self::ShortName(short_name) => buf[..2].copy_from_slice(short_name),
-            Self::LongName(long_name) => {
-                (&mut buf[..long_name.len()]).copy_from_slice(long_name.as_bytes())
-            }
         }
     }
 }
@@ -173,7 +129,7 @@ impl Client {
         }
     }
 
-    pub async fn subscribe(&'static self, topic: Topic) -> Result<u16, Error> {
+    pub async fn subscribe(&'static self, topic: TopicFilter) -> Result<TopicId, Error> {
         loop {
             ACTION_REQUEST_CHANNEL
                 .send(ActionRequest {
@@ -192,7 +148,7 @@ impl Client {
                 loop {
                     match self.message_channel.receive().await {
                         Message::TopicInfo { msg_id: _, topic } => {
-                            debug!("Subscription: got msg_id {} -> topic_id {}", msgid, topic);
+                            debug!("Subscription: got msg_id {} -> topic_id {:?}", msgid, topic);
                             return Ok(topic);
                         }
                         Message::Congestion { .. } => {
@@ -209,12 +165,16 @@ impl Client {
         }
     }
 
-    pub async fn register(&'static self, topic: Topic) -> Result<u16, Error> {
+    /// Registers the full `topic_name`, and returns the normal topic ID assigned by the gateway.
+    pub async fn register(&'static self, topic_name: &str) -> Result<TopicId, Error> {
+        let topic_name: String<MAX_TOPIC_LENGTH> =
+            String::try_from(topic_name).map_err(|_| Error::TopicTooLong)?;
+
         loop {
             ACTION_REQUEST_CHANNEL
                 .send(ActionRequest {
                     action: Action::Register {
-                        topic: topic.clone(),
+                        topic_name: topic_name.clone(),
                         message_tx: self.message_channel.sender(),
                     },
                     response_tx: self.action_response_channel.sender(),
@@ -227,7 +187,7 @@ impl Client {
                 loop {
                     match self.message_channel.receive().await {
                         Message::TopicInfo { msg_id: _, topic } => {
-                            debug!("Registration: got msg_id {} -> topic_id {}", msgid, topic);
+                            debug!("Registration: got msg_id {} -> topic_id {:?}", msgid, topic);
                             return Ok(topic);
                         }
                         Message::Congestion { .. } => {
@@ -244,7 +204,7 @@ impl Client {
         }
     }
 
-    pub async fn publish(&'static self, topic: Topic, payload: &[u8]) -> Result<(), Error> {
+    pub async fn publish(&'static self, topic: TopicId, payload: &[u8]) -> Result<(), Error> {
         if payload.len() > MAX_PAYLOAD_SIZE {
             return Err(Error::PayloadTooBig);
         }
@@ -255,7 +215,7 @@ impl Client {
                 ACTION_REQUEST_CHANNEL
                     .send(ActionRequest {
                         action: Action::Publish {
-                            topic: topic.clone(),
+                            topic,
                             payload: payload_vec.clone(),
                             quality_of_service: self.quality_of_service.clone(),
                         },
@@ -273,7 +233,7 @@ impl Client {
                                 topic,
                                 return_code: _,
                             } => {
-                                info!("got PubAck for topic id {}", topic);
+                                info!("got PubAck for topic id {:?}", topic);
                                 return Ok(());
                             }
                             _ => {
@@ -316,11 +276,11 @@ impl Client {
     pub async fn receive(&'static self) -> Message {
         let msg = self.message_channel.receive().await;
 
-        if self.quality_of_service == QoS::One {
+        if let (QoS::One, Some(topic)) = (self.quality_of_service, msg.get_topic()) {
             ACTION_REQUEST_CHANNEL
                 .send(ActionRequest {
                     action: Action::PubAck {
-                        topic: msg.clone().get_topic(),
+                        topic,
                         msg_id: msg.clone().get_msg_id(),
                         return_code: ReturnCode::Accepted,
                     },

@@ -1,4 +1,7 @@
-use crate::serialization::flags::{Flags, QoS};
+use crate::{
+    serialization::flags::{Flags, QoS},
+    topic::TopicId,
+};
 #[cfg(feature = "defmt")]
 use ariel_os_debug_log::defmt;
 use bilge::prelude::*;
@@ -139,8 +142,9 @@ impl Publish {
         self.value.to_be_bytes()
     }
 
-    pub fn get_topic_id(&self) -> u16 {
-        self.topic_id()
+    /// Returns the topic, interpreted according to the topic ID type found in flags
+    pub fn get_topic_id(&self) -> TopicId {
+        TopicId::new(self.flags().topic_id_type(), self.topic_id())
     }
 
     pub fn get_msg_id(&self) -> u16 {

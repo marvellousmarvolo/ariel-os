@@ -8,9 +8,10 @@ use ariel_os::{
     debug::log::*,
     gpio::{Input, Level, Output, Pull},
     mqttsn::{
-        client::{Client, Message, Topic},
+        client::{Client, Message},
         serialization::flags::QoS,
         settings::Settings,
+        topic::TopicFilter,
     },
     time::{Duration, Instant, Timer},
 };
@@ -33,14 +34,11 @@ async fn mqtt_sn_performance_sender(peripherals: pins::Peripherals) {
         .unwrap();
 
     static CLIENT_SEND: Client = Client::new(QOS);
-    let topic_id_send = CLIENT_SEND
-        .register(Topic::from_long("perf_b"))
-        .await
-        .unwrap();
+    let topic_id_send = CLIENT_SEND.register("perf_b").await.unwrap();
 
     static CLIENT_RECV: Client = Client::new(QOS);
     let topic_id_recv = CLIENT_RECV
-        .subscribe(Topic::from_long("perf_a"))
+        .subscribe(TopicFilter::name("perf_a").unwrap())
         .await
         .unwrap();
 
@@ -55,9 +53,7 @@ async fn mqtt_sn_performance_sender(peripherals: pins::Peripherals) {
 
         let t_start = Instant::now().as_micros();
         let payload = t_start.to_be_bytes();
-        let _ = CLIENT_SEND
-            .publish(Topic::from_id(topic_id_send), &payload)
-            .await;
+        let _ = CLIENT_SEND.publish(topic_id_send, &payload).await;
 
         let msg = CLIENT_RECV.receive().await;
         let t_roundtrip = Instant::now().as_micros() - t_start;

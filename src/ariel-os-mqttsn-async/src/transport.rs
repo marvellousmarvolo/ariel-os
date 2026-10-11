@@ -1,9 +1,8 @@
 use crate::error::Error;
-use ariel_os_debug_log::info;
 use embassy_net::{
     IpEndpoint,
     tcp::TcpSocket,
-    udp::{SendError, UdpSocket},
+    udp::UdpSocket,
 };
 
 #[allow(async_fn_in_trait)]

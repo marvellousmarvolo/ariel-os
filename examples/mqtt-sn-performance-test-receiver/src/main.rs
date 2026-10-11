@@ -5,9 +5,10 @@ mod pins;
 
 use ariel_os::{
     debug::log::*, gpio::{Input, Level, Output, Pull}, mqttsn::{
-        client::{Client, Message, Topic},
+        client::{Client, Message},
         serialization::flags::QoS,
         settings::Settings,
+        topic::TopicFilter,
     }, reexports::embassy_time::WithTimeout, time::{Duration, Instant, Timer}
 };
 
@@ -31,14 +32,11 @@ async fn mqtt_sn_performance_receiver(peripherals: pins::Peripherals) {
         .unwrap();
 
     static CLIENT_SEND: Client = Client::new(QOS);
-    let topic_id_send = CLIENT_SEND
-        .register(Topic::from_long("perf_a"))
-        .await
-        .unwrap();
+    let topic_id_send = CLIENT_SEND.register("perf_a").await.unwrap();
 
     static CLIENT_RECV: Client = Client::new(QOS);
     let topic_id_recv = CLIENT_RECV
-        .subscribe(Topic::from_long("perf_b"))
+        .subscribe(TopicFilter::name("perf_b").unwrap())
         .await
         .unwrap();
 
@@ -65,7 +63,7 @@ async fn mqtt_sn_performance_receiver(peripherals: pins::Peripherals) {
             } => {
                 // let t_start = u64::from_be_bytes(payload.into_array().unwrap());
                 let _ = CLIENT_SEND
-                    .publish(Topic::from_id(topic_id_send), &t_delta.to_be_bytes())
+                    .publish(topic_id_send, &t_delta.to_be_bytes())
                     .await;
             }
             _ => {
