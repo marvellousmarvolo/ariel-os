@@ -9,9 +9,9 @@ pub mod transport;
 use crate::error::Error;
 use crate::serialization::header::{HeaderLong, HeaderShort};
 use crate::transport::{
-    // TcpTransport, 
-    Transport, 
-    UdpTransport
+    // TcpTransport,
+    Transport,
+    UdpTransport,
 };
 use crate::{
     client::*,
@@ -22,10 +22,7 @@ use ariel_os_debug_log::*;
 use ariel_os_embassy::net;
 use ariel_os_utils::ipv4_addr_from_env;
 use bilge::Bitsized;
-use core::{
-    default::Default,
-    net::Ipv4Addr,
-};
+use core::{default::Default, net::Ipv4Addr};
 use embassy_futures::select::{Either4, select4};
 use embassy_net::{
     IpEndpoint,
@@ -65,17 +62,24 @@ enum PendingRequest {
     Subscription {
         filter: TopicFilter,
         message_tx: MessageSender,
+        response_tx: ActionReplySender,
     },
     /// A REGISTER, whose REGACK always carries a normal topic ID.
-    Registration { message_tx: MessageSender },
+    Registration {
+        response_tx: ActionReplySender,
+    },
+    Publication {
+        response_tx: ActionReplySender,
+    },
 }
 
 impl PendingRequest {
     /// Returns the channel through which the requesting client awaits the outcome.
-    fn message_tx(&self) -> MessageSender {
+    fn response_tx(&self) -> ActionReplySender {
         match self {
-            Self::Subscription { message_tx, .. } => *message_tx,
-            Self::Registration { message_tx } => *message_tx,
+            Self::Subscription { response_tx, .. }
+            | Self::Registration { response_tx }
+            | Self::Publication { response_tx } => *response_tx,
         }
     }
 }
@@ -172,12 +176,12 @@ pub async fn start(settings: Settings<'static>) {
     connection.run().await;
 }
 
-pub struct MqttsnConnection<'a, 'ch, T: Transport + MqttPacketReceive> {
+pub struct MqttsnConnection<'a, T: Transport + MqttPacketReceive> {
     client_id: &'a [u8],
     stack: net::NetworkStack,
     state: State,
     transport: &'a mut T,
-    action_rx: Receiver<'a, CriticalSectionRawMutex, ActionRequest<'ch>, 1>,
+    action_rx: Receiver<'a, CriticalSectionRawMutex, ActionRequest, 1>,
     msg_id: u16,
     topic_map: TopicMap,
     message_tx_list: MessageTxList,
@@ -186,7 +190,7 @@ pub struct MqttsnConnection<'a, 'ch, T: Transport + MqttPacketReceive> {
     clean_session: bool,
 }
 
-impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
+impl<'a, T: Transport + MqttPacketReceive> MqttsnConnection<'a, T> {
     async fn run(&mut self) {
         loop {
             while self.state == State::Disconnected {
@@ -251,22 +255,23 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
         }
     }
 
-    async fn handle_action_request(
-        &mut self,
-        action_request: ActionRequest<'_>,
-    ) -> Result<(), Error> {
+    async fn handle_action_request(&mut self, action_request: ActionRequest) -> Result<(), Error> {
         let ActionRequest {
             action,
             response_tx,
         } = action_request;
-        let action_response = self.handle_action(action).await;
+        let action_response = self.handle_action(action, response_tx).await;
 
-        response_tx.send(action_response).await; // TODO -> Option / ActionResponse
+        response_tx.send(action_response).await;
 
         Ok(())
     }
 
-    async fn handle_action(&mut self, action: Action) -> Result<ActionResponse, Error> {
+    async fn handle_action(
+        &mut self,
+        action: Action,
+        response_tx: ActionReplySender,
+    ) -> Result<ActionResponse, Error> {
         match action {
             Action::Subscribe {
                 topic,
@@ -283,17 +288,15 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
                         PendingRequest::Subscription {
                             filter: topic,
                             message_tx,
+                            response_tx,
                         },
                     );
-                    Ok(ActionResponse::Subscription { msg_id })
+                    Ok(ActionResponse::Pending { msg_id })
                 } else {
                     Err(Error::NoFreeSubscriberSlot)
                 }
             }
-            Action::Register {
-                topic_name,
-                message_tx,
-            } => {
+            Action::Register { topic_name } => {
                 debug!("register");
 
                 if self.msg_id_map.capacity() > self.msg_id_map.len() {
@@ -301,8 +304,8 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
                     // always succeeds, space checked above. can ignore error.
                     let _ = self
                         .msg_id_map
-                        .insert(msg_id, PendingRequest::Registration { message_tx });
-                    Ok(ActionResponse::Registration { msg_id })
+                        .insert(msg_id, PendingRequest::Registration { response_tx });
+                    Ok(ActionResponse::Pending { msg_id })
                 } else {
                     Err(Error::NoFreeSubscriberSlot)
                 }
@@ -311,11 +314,35 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
                 topic,
                 payload,
                 quality_of_service,
+                retransmission,
             } => {
                 debug!("publish");
 
-                self.publish(topic, &payload, quality_of_service).await?;
-                Ok(ActionResponse::Ok)
+                let (msg_id, dup) = match retransmission {
+                    Some(msg_id) => (msg_id, true),
+                    None => (self.get_next_msg_id(), false),
+                };
+
+                if quality_of_service != QoS::One {
+                    self.publish(msg_id, topic, &payload, quality_of_service, dup)
+                        .await?;
+                    return Ok(ActionResponse::Ok);
+                }
+
+                // A retransmission still holds its slot, unless its PUBACK came in too late
+                if self.msg_id_map.contains_key(&msg_id)
+                    || self.msg_id_map.capacity() > self.msg_id_map.len()
+                {
+                    self.publish(msg_id, topic, &payload, quality_of_service, dup)
+                        .await?;
+                    // always succeeds, space checked above. can ignore error.
+                    let _ = self
+                        .msg_id_map
+                        .insert(msg_id, PendingRequest::Publication { response_tx });
+                    Ok(ActionResponse::Pending { msg_id })
+                } else {
+                    Err(Error::NoFreeSubscriberSlot)
+                }
             }
             Action::Disconnect { duration } => {
                 debug!("disconnect");
@@ -323,17 +350,10 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
                 self.disconnect(duration).await?;
                 Ok(ActionResponse::Ok)
             }
-            Action::PubAck {
-                msg_id,
-                topic,
-                return_code,
-            } => {
-                debug!("Send PubAck for msg_id {}", msg_id);
-                self.pub_ack(msg_id, topic, return_code).await?;
-                Ok(ActionResponse::Ok)
-            }
-            Action::Timeout {} => {
+            Action::Timeout { msg_id } => {
                 warn!("Timed out. Attempt reconnecting...");
+                // The client stopped waiting, so a late answer would have nowhere to go to
+                self.msg_id_map.remove(&msg_id);
                 self.clean_session = false;
                 self.state = State::Disconnected;
                 Ok(ActionResponse::Ok)
@@ -404,8 +424,11 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
             ReturnCode::Accepted => {
                 info!("providing Quality of Service {:?}", sub_ack.get_qos());
 
-                if let Some(PendingRequest::Subscription { filter, message_tx }) =
-                    self.msg_id_map.remove(&sub_ack.get_msg_id())
+                if let Some(PendingRequest::Subscription {
+                    filter,
+                    message_tx,
+                    response_tx,
+                }) = self.msg_id_map.remove(&sub_ack.get_msg_id())
                 {
                     let topic_id = filter.topic_id(sub_ack.get_topic_id());
                     info!(
@@ -423,12 +446,11 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
                         // TODO: handle error
                         let _ = self.topic_map.register_subscriber(topic_id, i as u16);
 
-                        message_tx
-                            .send(Message::TopicInfo {
+                        response_tx
+                            .send(Ok(ActionResponse::TopicInfo {
                                 msg_id: sub_ack.get_msg_id(),
                                 topic: topic_id,
-                                // TODO: add QoS
-                            })
+                            }))
                             .await;
                     } else {
                         error!("no free client subscriber slot");
@@ -451,8 +473,8 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
 
                 if let Some(pending_request) = self.msg_id_map.remove(&msg_id) {
                     pending_request
-                        .message_tx()
-                        .send(Message::Congestion { msg_id })
+                        .response_tx()
+                        .send(Ok(ActionResponse::Congestion { msg_id }))
                         .await;
                 } else {
                     warn!("No return channel for received msg_id. Ignore SubAck");
@@ -478,30 +500,15 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
                     topic_id
                 );
 
-                if let Some(PendingRequest::Registration { message_tx }) =
+                if let Some(PendingRequest::Registration { response_tx }) =
                     self.msg_id_map.remove(&reg_ack.get_msg_id())
                 {
-                    if let Some((i, message_tx_list_entry)) = self
-                        .message_tx_list
-                        .iter_mut()
-                        .enumerate()
-                        .find(|(_i, c)| c.is_none())
-                    {
-                        *message_tx_list_entry = Some(message_tx);
-                        // TODO: handle error
-                        let _ = self.topic_map.register_subscriber(topic_id, i as u16);
-
-                        message_tx
-                            .send(Message::TopicInfo {
-                                msg_id: reg_ack.get_msg_id(),
-                                topic: topic_id,
-                            })
-                            .await;
-                    } else {
-                        error!("no free client subscriber slot");
-                        // TODO: send info message to client
-                        return Err(Error::NoFreeSubscriberSlot);
-                    }
+                    response_tx
+                        .send(Ok(ActionResponse::TopicInfo {
+                            msg_id: reg_ack.get_msg_id(),
+                            topic: topic_id,
+                        }))
+                        .await;
                 } else {
                     warn!("No return channel for received msg_id. Ignore RegAck");
                 }
@@ -516,8 +523,8 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
 
                 if let Some(pending_request) = self.msg_id_map.remove(&msg_id) {
                     pending_request
-                        .message_tx()
-                        .send(Message::Congestion { msg_id })
+                        .response_tx()
+                        .send(Ok(ActionResponse::Congestion { msg_id }))
                         .await;
                 } else {
                     warn!("No return channel for received msg_id. Ignore RegAck");
@@ -534,70 +541,79 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
 
         debug!("publish topic={:?}", topic_id);
 
-        // send PubAck w/ return code Rejected if topic_id is not found
+        let Some(&channel_bitmap) = self.topic_map.get(&topic_id) else {
+            error!("Topic in message not found in Topic Map!");
+            return self
+                .acknowledge(publish, ReturnCode::RejectedInvalidTopicId)
+                .await;
+        };
 
-        let mut it = self
-            .topic_map
-            .iter()
-            .filter(|(key, _)| **key == topic_id)
-            .peekable();
+        // Each set bit of the bitmap is the index of a subscribed client in the message_tx_list
+        let mut channel_bitmap = channel_bitmap;
+        let mut delivered_to_all = true;
+        while channel_bitmap != 0 {
+            let channel_id = channel_bitmap.trailing_zeros() as usize;
+            let channel = self.message_tx_list[channel_id].as_ref().unwrap();
 
-        if it.peek().is_none() {
-            error!("Topic in message not found in Topic Map!")
-        }
-
-        for (topic, channel_bitmap) in it {
-            // TODO: explain channel bitmap
-            let mut channel_bitmap = *channel_bitmap;
-            while channel_bitmap.leading_zeros() < 16 {
-                let channel_id = channel_bitmap.trailing_zeros() as usize;
-                let channel = self.message_tx_list[channel_id].as_ref().unwrap();
-                let _ = channel
-                    .send(Message::Publish {
-                        msg_id: publish.get_msg_id(),
-                        topic: *topic,
-                        payload: data.clone(),
-                    })
-                    .await;
-                let bit = 1 << channel_id;
-                channel_bitmap = channel_bitmap & !bit;
+            let message = Message {
+                topic: topic_id,
+                payload: data.clone(),
+            };
+            if channel.try_send(message).is_err() {
+                warn!(
+                    "Client {} is busy, message {} not delivered",
+                    channel_id,
+                    publish.get_msg_id()
+                );
+                delivered_to_all = false;
             }
+
+            channel_bitmap &= !(1 << channel_id);
         }
-        Ok(())
+
+        if delivered_to_all {
+            self.acknowledge(publish, ReturnCode::Accepted).await
+        } else {
+            // Without a PUBACK, the gateway retransmits a QoS 1 message
+            // A QoS 0 message may be lost by definition
+            Ok(())
+        }
+    }
+
+    /// Acknowledges an incoming PUBLISH, if its QoS asks for it.
+    async fn acknowledge(
+        &mut self,
+        publish: &Publish,
+        return_code: ReturnCode,
+    ) -> Result<(), Error> {
+        match publish.get_qos() {
+            QoS::One => {
+                self.pub_ack(publish.get_msg_id(), publish.get_topic_id(), return_code)
+                    .await
+            }
+            _ => Ok(()),
+        }
     }
 
     async fn handle_pub_ack(&mut self, pub_ack: &PubAck) -> Result<(), Error> {
-        let topic_id = pub_ack.get_topic_id();
+        let msg_id = pub_ack.get_msg_id();
 
         debug!(
             "Received pub_ack for msg_id {} on topic {}",
-            pub_ack.get_msg_id(),
-            topic_id
+            msg_id,
+            pub_ack.get_topic_id()
         );
 
-        // PUBACK carries no flags, so only the raw value of the topic ID can be compared.
-        for (topic, channel_bitmap) in self
-            .topic_map
-            .iter()
-            .filter(|(key, _)| key.value() == topic_id)
-        {
-            // TODO: explain channel bitmap
-            let mut channel_bitmap = *channel_bitmap;
-            while channel_bitmap.leading_zeros() < 16 {
-                let channel_id = channel_bitmap.trailing_zeros() as usize;
-                let channel = self.message_tx_list[channel_id].as_ref().unwrap();
-                let _ = channel
-                    .send(Message::PubAck {
-                        msg_id: pub_ack.get_msg_id(),
-                        topic: *topic,
-                        return_code: pub_ack.get_return_code(),
-                    })
-                    .await;
-
-                //-> clearbit()
-                let bit = 1 << channel_id;
-                channel_bitmap = channel_bitmap & !bit;
-            }
+        // Only the message ID tells which client published, as several clients may share a topic
+        if let Some(PendingRequest::Publication { response_tx }) = self.msg_id_map.remove(&msg_id) {
+            response_tx
+                .send(Ok(ActionResponse::PubAck {
+                    msg_id,
+                    return_code: pub_ack.get_return_code(),
+                }))
+                .await;
+        } else {
+            warn!("No return channel for received msg_id. Ignore PubAck");
         }
         Ok(())
     }
@@ -730,17 +746,17 @@ impl<'a, 'ch, T: Transport + MqttPacketReceive> MqttsnConnection<'a, 'ch, T> {
 
     pub async fn publish(
         &mut self,
+        msg_id: u16,
         topic: TopicId,
         payload: &[u8],
         quality_of_service: QoS,
+        dup: bool,
     ) -> Result<(), Error> {
         self.check_state(State::Active)?;
 
-        let msg_id = self.get_next_msg_id();
-
         let mut buf: [u8; MAX_PAYLOAD_SIZE + 32] = [0; MAX_PAYLOAD_SIZE + 32];
 
-        let packet = Packet::publish(msg_id, topic, quality_of_service, payload);
+        let packet = Packet::publish(msg_id, topic, quality_of_service, dup, payload);
 
         {
             let packet_slice = packet.write_to_buf(&mut buf);

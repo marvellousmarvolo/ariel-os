@@ -51,25 +51,13 @@ async fn mqtt_sn_performance_receiver(peripherals: pins::Peripherals) {
         }
 
         let t_local = Instant::now().as_micros();
-        let msg = CLIENT_RECV.receive().await;
+        let _msg = CLIENT_RECV.receive().await;
         let t_delta = Instant::now().as_micros() - t_local;
         info!("Iteration {}", loop_count);
         info!("  One-way took {} µs", t_delta);
-        match msg {
-            Message::Publish {
-                msg_id: _,
-                topic,
-                payload: _,
-            } => {
-                // let t_start = u64::from_be_bytes(payload.into_array().unwrap());
-                let _ = CLIENT_SEND
-                    .publish(topic_id_send, &t_delta.to_be_bytes())
-                    .await;
-            }
-            _ => {
-                info!("  MESSAGE UNEXPECTED");
-            }
-        }
+        let _ = CLIENT_SEND
+            .publish(topic_id_send, &t_delta.to_be_bytes())
+            .await;
         loop_count += 1;
     }
     info!("BENCHMARK DONE");

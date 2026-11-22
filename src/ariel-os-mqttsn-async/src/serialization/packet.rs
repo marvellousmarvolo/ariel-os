@@ -459,9 +459,10 @@ impl Packet<'_> {
         msg_id: u16,
         topic: TopicId,
         qos: QoS,
+        dup: bool,
         payload: &'a [u8],
     ) -> Packet<'a> {
-        let flags = Flags::new((&topic).into(), false, false, false, qos, false);
+        let flags = Flags::new((&topic).into(), false, false, false, qos, dup);
 
         let length = calculate_message_length(payload.len() + mvp::Publish::SIZE);
 

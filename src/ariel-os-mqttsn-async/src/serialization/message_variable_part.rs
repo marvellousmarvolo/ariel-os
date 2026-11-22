@@ -150,6 +150,10 @@ impl Publish {
     pub fn get_msg_id(&self) -> u16 {
         self.msg_id()
     }
+
+    pub fn get_qos(&self) -> QoS {
+        self.flags().qos()
+    }
 }
 
 #[bitsize(40)]

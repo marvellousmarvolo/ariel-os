@@ -55,22 +55,11 @@ async fn mqtt_sn_performance_sender(peripherals: pins::Peripherals) {
         let payload = t_start.to_be_bytes();
         let _ = CLIENT_SEND.publish(topic_id_send, &payload).await;
 
-        let msg = CLIENT_RECV.receive().await;
+        let Message { payload, .. } = CLIENT_RECV.receive().await;
         let t_roundtrip = Instant::now().as_micros() - t_start;
         info!("Iteration {}", i);
-        match msg {
-            Message::Publish {
-                msg_id: _,
-                topic: _,
-                payload,
-            } => {
-                let t_delta = u64::from_be_bytes(payload.into_array().unwrap());
-                info!("  One-way took {} µs", t_delta);
-            }
-            _ => {
-                info!("  MESSAGE UNEXPECTED");
-            }
-        }
+        let t_delta = u64::from_be_bytes(payload.into_array().unwrap());
+        info!("  One-way took {} µs", t_delta);
         info!("  Roundtrip took {} µs", t_roundtrip);
         Timer::after_secs(1).await;
     }

@@ -38,31 +38,24 @@ async fn mqtt_sn_home_assistant(peripherals: pins::Peripherals) {
     info!("command_topic: {:?}", command_topic);
 
     loop {
-        let msg = COMMAND_CLIENT.receive().await;
-        match msg {
-            Message::Publish { topic, payload } => {
-                if let Ok(utf8) = str::from_utf8(&payload) {
-                    match utf8 {
-                        "0" => {
-                            led.set_high();
-                            info!("LED turned off");
-                        }
-                        "1" => {
-                            led.set_low();
-                            info!("LED turned on");
-                        }
-                        _ => {
-                            info!("invalid LED command");
-                            continue;
-                        }
-                    }
-                } else {
-                    info!("got message for topic_id {:?} (non-utf8)", topic);
+        let Message { topic, payload } = COMMAND_CLIENT.receive().await;
+        if let Ok(utf8) = str::from_utf8(&payload) {
+            match utf8 {
+                "0" => {
+                    led.set_high();
+                    info!("LED turned off");
+                }
+                "1" => {
+                    led.set_low();
+                    info!("LED turned on");
+                }
+                _ => {
+                    info!("invalid LED command");
+                    continue;
                 }
             }
-            _ => {
-                info!("MESSAGE UNEXPECTED");
-            }
+        } else {
+            info!("got message for topic_id {:?} (non-utf8)", topic);
         }
     }
 }
