@@ -318,16 +318,17 @@ impl<'a, T: Transport + MqttPacketReceive> MqttsnConnection<'a, T> {
             } => {
                 debug!("publish");
 
+                // The specification reserves msg_id 0x0000 for QoS 0
+                if quality_of_service == QoS::Zero {
+                    self.publish(0x0000, topic, &payload, quality_of_service, false)
+                        .await?;
+                    return Ok(ActionResponse::Ok);
+                }
+
                 let (msg_id, dup) = match retransmission {
                     Some(msg_id) => (msg_id, true),
                     None => (self.get_next_msg_id(), false),
                 };
-
-                if quality_of_service != QoS::One {
-                    self.publish(msg_id, topic, &payload, quality_of_service, dup)
-                        .await?;
-                    return Ok(ActionResponse::Ok);
-                }
 
                 // A retransmission still holds its slot, unless its PUBACK came in too late
                 if self.msg_id_map.contains_key(&msg_id)
@@ -826,8 +827,13 @@ impl<'a, T: Transport + MqttPacketReceive> MqttsnConnection<'a, T> {
     }
 
     fn get_next_msg_id(&mut self) -> u16 {
-        let msg_id = self.msg_id;
-        self.msg_id += 1;
-        msg_id
+        loop {
+            let msg_id = self.msg_id;
+            self.msg_id = self.msg_id.wrapping_add(1);
+
+            if msg_id != 0x0000 && !self.msg_id_map.contains_key(&msg_id) {
+                return msg_id;
+            }
+        }
     }
 }

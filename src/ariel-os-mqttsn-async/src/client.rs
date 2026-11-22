@@ -34,9 +34,16 @@ pub struct ActionRequest {
 
 pub enum ActionResponse {
     Ok,
-    Pending { msg_id: u16 },
-    TopicInfo { msg_id: u16, topic: TopicId },
-    Congestion { msg_id: u16 },
+    Pending {
+        msg_id: u16,
+    },
+    TopicInfo {
+        msg_id: u16,
+        topic: TopicId,
+    },
+    Congestion {
+        msg_id: u16,
+    },
     PubAck {
         msg_id: u16,
         return_code: ReturnCode,
