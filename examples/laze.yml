@@ -49,6 +49,7 @@ subdirs:
   - mqtt-sn-home-assistant
   - mqtt-sn-performance-test-sender
   - mqtt-sn-performance-test-receiver
+  - mqtt-sn-test
   - mqtt-performance-test-sender
   - mqtt-performance-test-receiver
   - async-interop

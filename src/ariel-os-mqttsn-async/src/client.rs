@@ -1,5 +1,5 @@
 use crate::{
-    N_RETRY, T_RETRY, T_WAIT,
+    T_WAIT,
     error::Error,
     serialization::{flags::QoS, message_variable_part::ReturnCode},
     topic::{TopicFilter, TopicId},
@@ -9,7 +9,7 @@ use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     channel::{Channel, Sender},
 };
-use embassy_time::{Timer, WithTimeout};
+use embassy_time::Timer;
 use heapless::{String, Vec};
 
 pub const MAX_PAYLOAD_SIZE: usize = 1024; // !usize_from_env_or()
@@ -48,6 +48,9 @@ pub enum ActionResponse {
         msg_id: u16,
         return_code: ReturnCode,
     },
+    NoAnswer {
+        msg_id: u16,
+    },
 }
 
 impl ActionResponse {
@@ -56,7 +59,8 @@ impl ActionResponse {
         match self {
             Self::TopicInfo { msg_id, .. }
             | Self::Congestion { msg_id }
-            | Self::PubAck { msg_id, .. } => Some(*msg_id),
+            | Self::PubAck { msg_id, .. }
+            | Self::NoAnswer { msg_id } => Some(*msg_id),
             Self::Ok | Self::Pending { .. } => None,
         }
     }
@@ -76,14 +80,9 @@ pub enum Action {
         topic: TopicId,
         payload: Payload,
         quality_of_service: QoS,
-        /// The message ID of the first transmission attempt
-        retransmission: Option<u16>,
     },
     Disconnect {
         duration: Option<u16>,
-    },
-    Timeout {
-        msg_id: u16,
     },
 }
 
@@ -117,29 +116,21 @@ impl Client {
     }
 
     pub async fn subscribe(&'static self, topic: TopicFilter) -> Result<TopicId, Error> {
-        loop {
-            let msg_id = self
-                .request_pending(Action::Subscribe {
-                    topic: topic.clone(),
-                    message_tx: self.message_channel.sender(),
-                    quality_of_service: self.quality_of_service,
-                })
-                .await?;
+        let subscribe = Action::Subscribe {
+            topic,
+            message_tx: self.message_channel.sender(),
+            quality_of_service: self.quality_of_service,
+        };
 
-            match self.answer(msg_id).await {
-                ActionResponse::TopicInfo { topic, .. } => {
-                    debug!(
-                        "Subscription: got msg_id {} -> topic_id {:?}",
-                        msg_id, topic
-                    );
-                    return Ok(topic);
-                }
-                ActionResponse::Congestion { .. } => {
-                    warn!("Congestion occuring, waiting for subscription result...");
-                    Timer::after(T_WAIT).await;
-                }
-                _ => unreachable!("a SUBSCRIBE is only ever answered by a SUBACK"),
+        match self.exchange(subscribe).await? {
+            ActionResponse::TopicInfo { msg_id, topic } => {
+                debug!(
+                    "Subscription: got msg_id {} -> topic_id {:?}",
+                    msg_id, topic
+                );
+                Ok(topic)
             }
+            _ => unreachable!("a SUBSCRIBE is only ever answered by a SUBACK"),
         }
     }
 
@@ -148,62 +139,36 @@ impl Client {
         let topic_name: String<MAX_TOPIC_LENGTH> =
             String::try_from(topic_name).map_err(|_| Error::TopicTooLong)?;
 
-        loop {
-            let msg_id = self
-                .request_pending(Action::Register {
-                    topic_name: topic_name.clone(),
-                })
-                .await?;
-
-            match self.answer(msg_id).await {
-                ActionResponse::TopicInfo { topic, .. } => {
-                    debug!(
-                        "Registration: got msg_id {} -> topic_id {:?}",
-                        msg_id, topic
-                    );
-                    return Ok(topic);
-                }
-                ActionResponse::Congestion { .. } => {
-                    warn!("Congestion occuring, waiting for registration result...");
-                    Timer::after(T_WAIT).await;
-                }
-                _ => unreachable!("a REGISTER is only ever answered by a REGACK"),
+        match self.exchange(Action::Register { topic_name }).await? {
+            ActionResponse::TopicInfo { msg_id, topic } => {
+                debug!(
+                    "Registration: got msg_id {} -> topic_id {:?}",
+                    msg_id, topic
+                );
+                Ok(topic)
             }
+            _ => unreachable!("a REGISTER is only ever answered by a REGACK"),
         }
     }
 
     pub async fn publish(&'static self, topic: TopicId, payload: &[u8]) -> Result<(), Error> {
-        let payload: Payload = Vec::from_slice(payload).map_err(|_| Error::PayloadTooBig)?;
-        let publish = |retransmission| Action::Publish {
+        let publish = Action::Publish {
             topic,
-            payload: payload.clone(),
+            payload: Vec::from_slice(payload).map_err(|_| Error::PayloadTooBig)?,
             quality_of_service: self.quality_of_service,
-            retransmission,
         };
 
         if self.quality_of_service != QoS::One {
-            self.request(publish(None)).await?;
+            self.request(publish).await?;
             return Ok(());
         }
 
-        loop {
-            let msg_id = self.request_pending(publish(None)).await?;
-
-            for attempt in 1..=N_RETRY {
-                if attempt > 1 {
-                    self.request_pending(publish(Some(msg_id))).await?;
-                }
-
-                match self.answer(msg_id).with_timeout(T_RETRY).await {
-                    Ok(_) => {
-                        info!("got PubAck for message {}", msg_id);
-                        return Ok(());
-                    }
-                    Err(_) => warn!("Publish timed out {} out of {} times.", attempt, N_RETRY),
-                }
+        match self.exchange(publish).await? {
+            ActionResponse::PubAck { msg_id, .. } => {
+                info!("got PubAck for message {}", msg_id);
+                Ok(())
             }
-
-            self.request(Action::Timeout { msg_id }).await?;
+            _ => unreachable!("a QoS 1 PUBLISH is only ever answered by a PUBACK"),
         }
     }
 
@@ -235,7 +200,28 @@ impl Client {
         }
     }
 
-    /// Sends an `action` that the gateway answers later, and returns the message ID to await.
+    /// Sends an `action` that the gateway answers, and returns its answer.
+    async fn exchange(&'static self, action: Action) -> ActionReply {
+        loop {
+            let msg_id = self.request_pending(action.clone()).await?;
+
+            match self.answer(msg_id).await {
+                ActionResponse::Congestion { .. } => {
+                    warn!(
+                        "Congestion occuring, trying again in {} seconds",
+                        T_WAIT.as_secs()
+                    );
+                    Timer::after(T_WAIT).await;
+                }
+                ActionResponse::NoAnswer { .. } => {
+                    warn!("No answer to message {}, trying again", msg_id);
+                }
+                answer => return Ok(answer),
+            }
+        }
+    }
+
+    /// Returns the message ID for an `action` to await.
     async fn request_pending(&'static self, action: Action) -> Result<u16, Error> {
         match self.request(action).await? {
             ActionResponse::Pending { msg_id } => Ok(msg_id),

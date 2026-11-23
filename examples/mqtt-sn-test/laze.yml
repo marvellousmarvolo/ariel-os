@@ -1,0 +1,9 @@
+apps:
+  - name: mqtt-sn-test
+    env:
+      global:
+        CARGO_ENV:
+          - CONFIG_ISR_STACKSIZE=16384
+    selects:
+      - network
+      - has_buttons
